@@ -88,8 +88,8 @@ class SiegwartController(Node):
         # useConstantSpeed: Turn on constant speed option
         
         # TODO: insert your code for vu and omega
-        vu = 0 # [m/s]
-        omega = 0 # [rad/s]
+        vu = 0.0 # [m/s]
+        omega = 0.0 # [rad/s]
         twist.linear.x = vu
         twist.angular.z = omega
         return twist, rho

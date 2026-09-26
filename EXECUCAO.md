@@ -41,15 +41,22 @@ sudo apt install ros-$ROS_DISTRO-slam-toolbox \
 ```bash
 cd IA368ii/IA368_ws
 colcon build --packages-select ia368_pkg
-source install/setup.bash
+source install/setup.bash   # bash
+source install/setup.zsh    # zsh
 ```
+
+> **Todo terminal novo precisa desse `source`**, senão o `ros2 launch` responde `Package 'ia368_pkg' not found`. Use o arquivo do seu shell (`setup.bash` ou `setup.zsh`); misturar os dois não funciona. Para não repetir, adicione ao `~/.bashrc`/`~/.zshrc`, **depois** do `source /opt/ros/<distro>/setup.*`:
+>
+> ```bash
+> source /caminho/para/IA368ii/IA368_ws/install/setup.zsh
+> ```
 
 > Se aparecer `TypeError: canonicalize_version() got an unexpected keyword argument 'strip_trailing_zero'`, faça `pip install --upgrade setuptools==70.0.0` e compile de novo.
 
 ### Fluxo geral de cada projeto
 
 1. Abra o **CoppeliaSim** e carregue a cena (`.ttt`) do projeto.
-2. Em um terminal novo: `cd IA368ii/IA368_ws && source install/setup.bash`.
+2. Em um terminal novo: `cd IA368ii/IA368_ws && source install/setup.bash` (ou `setup.zsh`).
 3. Rode o `ros2 launch` correspondente. A maioria dos nós chama `sim.startSimulation()` sozinha, então não é preciso apertar *play*.
 4. Para encerrar: `Ctrl+C` no terminal e pare a simulação no CoppeliaSim.
 
