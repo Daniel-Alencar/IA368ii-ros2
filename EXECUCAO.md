@@ -365,3 +365,4 @@ Use o botão **Nav2 Goal** (ou *2D Goal Pose*) para clicar no destino do robô. 
 \* Executar de dentro de `IA368_ws`.
 
 As cenas ficam em `IA368_ws/src/ia368_pkg/`, exceto `home.ttt`, que está na raiz do repositório.
+
