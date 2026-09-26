@@ -19,12 +19,12 @@ Guia prático para rodar cada um dos projetos do pacote `ia368_pkg` (workspace `
 
 ## Situação dos projetos: o que falta implementar
 
-Nem todo projeto funciona "de ponta a ponta" só com o launch. Em alguns, o repositório entrega apenas a infraestrutura (sensores, atuadores, ponte com o CoppeliaSim) e **o aluno precisa escrever a lógica de controle**. Nesses, o launch sobe sem erro, mas o robô fica parado.
+Nem todo projeto funciona "de ponta a ponta" só com o launch. Em alguns, o aluno ainda precisa escrever parte do código (a lógica de controle, ou a própria ponte com o CoppeliaSim).
 
 | Projeto | Situação | O que o aluno precisa implementar |
 |---|---|---|
 | 1. YOLO 3D | ✅ Completo | Nada. Basta rodar. |
-| 2. Autodocking | ⚠️ **Incompleto** | Um **nó novo** com o comportamento de autodocking (não existe no pacote). |
+| 2. Autodocking | ✅ Ponte completa (atividade atual) / ⏳ docking autônomo é a **próxima** atividade | Nesta atividade: a ponte ROS 2 ↔ CoppeliaSim da [especificação](IA368_ws/src/ia368_pkg/autodocking/Especifications.md) (já corrigida nesta cópia). Na próxima: um nó externo com o comportamento de docking. |
 | 3. Controle de posição | ⚠️ **Incompleto** | A lei de controle em `control_law()` do `position_control_node_students.py`. |
 | 4. Pega banana | ⚠️ **Incompleto** | Um **nó novo** que use as detecções para mover o robô até a banana. |
 | 5. SLAM Toolbox | ✅ Completo | Nada. O mapeamento é feito pelo `slam_toolbox`; o robô é dirigido por teleoperação. |
@@ -139,32 +139,49 @@ Para visualizar: `rqt_image_view /yolo/annotated` ou `rviz2`.
 ros2 launch ia368_pkg remoteAPI_ROS2_bridge.launch.py
 ```
 
-**Nós:** `battery_node`, `bumper_and_velocity_node`, `charging_base_node`, `docking_node`.
+A atividade está descrita em [Especifications.md](IA368_ws/src/ia368_pkg/autodocking/Especifications.md). O objetivo é **só a ponte** ROS 2 ↔ CoppeliaSim; o comportamento autônomo de docking fica para a próxima atividade.
 
-**Tópicos úteis:**
+**Nós e interface ROS 2:**
 
-- `/myRobot/battery_state` (`BatteryState`)
-- `/myRobot/bumper` (`Wrench`)
-- `/myRobot/charging_base/strengthSignal` e `/myRobot/charging_base/relativeAngle` (`Float32`)
-- `/myRobot/cmd_vel` (`Twist`): comando de velocidade para o robô
+| Nó | Sinal/objeto no CoppeliaSim | Tópico ROS 2 | Direção |
+|---|---|---|---|
+| `battery_node` | `<handle>Battery` (float) e `<handle>Charging` (int) | `/myRobot/battery_state` (`BatteryState`; carga em `power_supply_status`) | Sim → ROS |
+| `charging_base_node` | `<handle>signalStrength` (float) | `/myRobot/charging_base/strengthSignal` (`Float32`) | Sim → ROS |
+| `charging_base_node` | `<handle>relativeAngle` (float) | `/myRobot/charging_base/relativeAngle` (`Float32`) | Sim → ROS |
+| `docking_node` | `<handle>Docking` (int) | `/myRobot/docking_mode` (`Int32`) | ROS → Sim |
+| `bumper_and_velocity_node` | juntas das rodas (`sim.setJointTargetVelocity`) | `/myRobot/cmd_vel` (`Twist`) | ROS → Sim |
+| `bumper_and_velocity_node` | `/myRobot/forceSensor` | `/myRobot/bumper` (`Wrench`) | Sim → ROS |
 
-Teste manual do movimento:
+O `bumper_and_velocity_node` encontra sozinho as juntas das rodas (as juntas com `left`/`right` no nome dentro de `/myRobot`) e mede a distância entre elas para usar como `wheel_base`. No início ele registra no log quais juntas e qual `wheel_base` foram usados. Se a detecção falhar ou os valores estiverem errados, defina os parâmetros:
 
 ```bash
-ros2 topic pub /myRobot/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
+ros2 run ia368_pkg bumper_and_velocity_node --ros-args \
+    -p left_motor:=/myRobot/leftMotor -p right_motor:=/myRobot/rightMotor \
+    -p wheel_base:=0.2 -p wheel_radius:=0.0975
 ```
 
-### O que falta implementar
+### Testar a ponte (o que a especificação pede para demonstrar)
 
-⚠️ Os quatro nós do launch são só a **ponte** entre o CoppeliaSim e o ROS 2: publicam sensores e aplicam comandos. Nenhum deles decide como o robô deve se mover. Não há no pacote um nó que faça o autodocking (o nome da cena, `..._students.ttt`, indica que essa é a parte do aluno).
+```bash
+ros2 topic echo /myRobot/battery_state                  # bateria + estado de carga
+ros2 topic echo /myRobot/charging_base/strengthSignal   # intensidade do beacon IR
+ros2 topic echo /myRobot/charging_base/relativeAngle    # ângulo até a base
+ros2 topic pub --once /myRobot/docking_mode std_msgs/msg/Int32 "{data: 1}"   # ativa docking (0 desativa)
+ros2 topic pub /myRobot/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}, angular: {z: 0.3}}"
+```
 
-O aluno precisa criar um nó (e registrá-lo no `setup.py`) que:
+Se o `charging_base_node` avisar `Signal "...signalStrength" not found`, a cena não está escrevendo esse sinal (confira se é a cena da atividade e se a simulação está rodando).
 
-- **assine** `/myRobot/battery_state`, `/myRobot/bumper`, `/myRobot/charging_base/strengthSignal` e `/myRobot/charging_base/relativeAngle`;
-- **publique** `/myRobot/cmd_vel` (`Twist`) para levar o robô até a base de carga, usando o sinal e o ângulo relativo da base e reagindo a colisões pelo bumper;
-- **publique** `/myRobot/docking_mode` (`Int32`), que o `docking_node` repassa para a cena como o sinal `<handle>Docking`, para acionar o modo de acoplamento/carga.
+### Correções feitas em relação ao código original
 
-Sem esse nó, o launch roda, mas o robô fica parado.
+O código original da ponte não atendia a especificação em dois pontos (já corrigidos nesta cópia):
+
+- **`charging_base_node`:** lia os sinais `StrengthSignal`/`RelativeAngle` (nomes de um protocolo antigo, com o sinal `Beacon`) em vez de `signalStrength`/`relativeAngle`. Como os nomes diferenciam maiúsculas, nada era publicado, e os avisos estavam comentados.
+- **`bumper_and_velocity_node`:** gravava os sinais intermediários `rightVel`/`leftVel` em vez de chamar `sim.setJointTargetVelocity()` nas juntas, o que a especificação proíbe. Também ativava `sim.setStepping(True)` sem chamar `sim.step()` (o que pode congelar a simulação) e rodava em espera ativa (CPU a 100%). Foi reescrito como um nó ROS 2 normal, com timer.
+
+### Próxima atividade: docking autônomo
+
+Com a ponte pronta, a próxima atividade é criar um nó externo (registrado no `setup.py`) que use **apenas** os tópicos acima: ler bateria, beacon e bumper, publicar `/myRobot/cmd_vel` para levar o robô até a base e usar `/myRobot/docking_mode` para ativar o docking quando a bateria estiver baixa.
 
 ---
 
@@ -338,7 +355,7 @@ Use o botão **Nav2 Goal** (ou *2D Goal Pose*) para clicar no destino do robô. 
 | Projeto | Situação | Cena (`.ttt`) | Comando |
 |---|---|---|---|
 | YOLO 3D | ✅ | `yolo_detector/tf_scene.ttt` | `ros2 launch ia368_pkg yolo_detection.launch.py dummy:=0` |
-| Autodocking | ⚠️ falta o nó de docking | `autodocking/Evaluation scene3.2_students.ttt` | `ros2 launch ia368_pkg remoteAPI_ROS2_bridge.launch.py` |
+| Autodocking | ✅ ponte (docking autônomo: próxima atividade) | `autodocking/Evaluation scene3.2_students.ttt` | `ros2 launch ia368_pkg remoteAPI_ROS2_bridge.launch.py` |
 | Controle de posição | ⚠️ falta `control_law()` | `position_control/Exercise_position_control.ttt` | `ros2 launch ia368_pkg position_control.launch.py` |
 | Pega banana | ⚠️ falta o nó de controle | `yolo_detector/pega_banana.ttt` | `ros2 launch ia368_pkg pega_banana.launch.py dummy:=0` |
 | SLAM Toolbox* | ✅ | `slam_toolbox/p3_slam_toolbox.ttt` | `ros2 launch ia368_pkg slam_toolbox.launch.py` |
