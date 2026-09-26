@@ -3,3 +3,5 @@ IA368_ws/build
 IA368_ws/install
 IA368_ws/log
 yolo11n-seg.pt
+
+.vscode
