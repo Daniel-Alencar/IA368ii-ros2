@@ -4,6 +4,7 @@ Guia prático para rodar cada um dos projetos do pacote `ia368_pkg` (workspace `
 
 ## Sumário
 
+- [Situação dos projetos: o que falta implementar](#situação-dos-projetos-o-que-falta-implementar)
 0. [Preparação (uma vez só)](#0-preparação-uma-vez-só)
 1. [Detecção 3D com YOLO](#1-detecção-3d-com-yolo)
 2. [Autodocking (ponte Remote API ↔ ROS 2)](#2-autodocking-ponte-remote-api--ros-2)
@@ -13,6 +14,24 @@ Guia prático para rodar cada um dos projetos do pacote `ia368_pkg` (workspace `
 6. [SLAM RGB-D com RTAB-Map (Kinect)](#6-slam-rgb-d-com-rtab-map-kinect)
 7. [Navegação com Nav2](#7-navegação-com-nav2)
 8. [Resumo rápido](#resumo-rápido)
+
+---
+
+## Situação dos projetos: o que falta implementar
+
+Nem todo projeto funciona "de ponta a ponta" só com o launch. Em alguns, o repositório entrega apenas a infraestrutura (sensores, atuadores, ponte com o CoppeliaSim) e **o aluno precisa escrever a lógica de controle**. Nesses, o launch sobe sem erro, mas o robô fica parado.
+
+| Projeto | Situação | O que o aluno precisa implementar |
+|---|---|---|
+| 1. YOLO 3D | ✅ Completo | Nada. Basta rodar. |
+| 2. Autodocking | ⚠️ **Incompleto** | Um **nó novo** com o comportamento de autodocking (não existe no pacote). |
+| 3. Controle de posição | ⚠️ **Incompleto** | A lei de controle em `control_law()` do `position_control_node_students.py`. |
+| 4. Pega banana | ⚠️ **Incompleto** | Um **nó novo** que use as detecções para mover o robô até a banana. |
+| 5. SLAM Toolbox | ✅ Completo | Nada. O mapeamento é feito pelo `slam_toolbox`; o robô é dirigido por teleoperação. |
+| 6. RTAB-Map | ✅ Completo | Nada. O mapeamento é feito pelo `rtabmap`; o robô é dirigido por teleoperação. |
+| 7. Nav2 | ✅ Completo | Nada. O Nav2 planeja e controla; as metas são enviadas pelo RViz. Os parâmetros em `config/nav2_params_*.yaml` podem ser ajustados. |
+
+Nos projetos incompletos, os detalhes (tópicos disponíveis e o que o nó do aluno deve fazer) estão na seção de cada um, no bloco **"O que falta implementar"**.
 
 ---
 
@@ -135,6 +154,18 @@ Teste manual do movimento:
 ros2 topic pub /myRobot/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
 ```
 
+### O que falta implementar
+
+⚠️ Os quatro nós do launch são só a **ponte** entre o CoppeliaSim e o ROS 2: publicam sensores e aplicam comandos. Nenhum deles decide como o robô deve se mover. Não há no pacote um nó que faça o autodocking (o nome da cena, `..._students.ttt`, indica que essa é a parte do aluno).
+
+O aluno precisa criar um nó (e registrá-lo no `setup.py`) que:
+
+- **assine** `/myRobot/battery_state`, `/myRobot/bumper`, `/myRobot/charging_base/strengthSignal` e `/myRobot/charging_base/relativeAngle`;
+- **publique** `/myRobot/cmd_vel` (`Twist`) para levar o robô até a base de carga, usando o sinal e o ângulo relativo da base e reagindo a colisões pelo bumper;
+- **publique** `/myRobot/docking_mode` (`Int32`), que o `docking_node` repassa para a cena como o sinal `<handle>Docking`, para acionar o modo de acoplamento/carga.
+
+Sem esse nó, o launch roda, mas o robô fica parado.
+
 ---
 
 ## 3. Controle de posição
@@ -142,9 +173,22 @@ ros2 topic pub /myRobot/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
 **Código:** [position_control/](IA368_ws/src/ia368_pkg/position_control/)
 **Cena:** [Exercise_position_control.ttt](IA368_ws/src/ia368_pkg/position_control/Exercise_position_control.ttt)
 
+### O que falta implementar
+
+⚠️ No template original do repositório, o método `control_law()` de [position_control_node_students.py](IA368_ws/src/ia368_pkg/position_control/position_control_node_students.py) tem um `# TODO` que devolve `vu = 0` e `omega = 0`. Com o template, o robô não se move.
+
+O aluno deve implementar o controlador de Siegwart:
+
+- **Task 1:** a lei de controle com os ganhos `Krho`, `Kalpha` e `Kbeta`.
+- **Task 2:** as opções `backwardAllowed` (andar de ré quando o alvo está atrás) e `useconstantSpeed`/`constantSpeed` (velocidade linear constante).
+
+O template também tem um bug na leitura de parâmetros: `useconstantSpeed` sobrescreve `self.constantSpeed`. A solução de referência (`position_control_node_solution.py`) está no `.gitignore` e não vem no repositório.
+
+> Nesta cópia local, as duas tasks já foram implementadas (e o bug corrigido). A explicação da implementação e da teoria está em [CONTROLADOR_SIEGWART.md](IA368_ws/src/ia368_pkg/position_control/CONTROLADOR_SIEGWART.md).
+
 ### Execução
 
-Implemente o controlador em [position_control_node_students.py](IA368_ws/src/ia368_pkg/position_control/position_control_node_students.py), recompile (`colcon build --packages-select ia368_pkg`) e rode:
+Com o controlador implementado, recompile (`colcon build --packages-select ia368_pkg`) e rode:
 
 ```bash
 ros2 launch ia368_pkg position_control.launch.py
@@ -179,6 +223,16 @@ ros2 launch ia368_pkg pega_banana.launch.py dummy:=0
 ```
 
 **Nós:** `kinect_node`, `tf_node`, `yolo_node`, `dummy_creation_node` (opcional; todos no namespace `yolo_detector`) e `vel_node` (namespace raiz, escuta `/myRobot/cmd_vel`).
+
+### O que falta implementar
+
+⚠️ O launch sobe a **percepção** (Kinect + YOLO) e o **atuador** (`vel_node`), mas nenhum nó publica em `/myRobot/cmd_vel`. Ou seja, o robô detecta os objetos mas não se move. O aluno precisa criar um nó (e registrá-lo no `setup.py` e no launch) que:
+
+- **leia a posição da banana**, pelo tópico `/yolo/object_3d_point` (`Marker`, no frame `camera_color_optical_frame`, com a classe em `marker.text`) ou pelas TFs `object_<classe>` publicadas pelo `yolo_node`;
+- **filtre a classe da banana** (no COCO, usado pelo `yolo11n-seg.pt`, `banana` é a classe 46, então `class_46`);
+- **publique** `/myRobot/cmd_vel` para aproximar o robô da banana. O controlador de posição do projeto 3 pode ser reaproveitado aqui.
+
+Além disso, o `yolo_node` só busca `./Bowl` e `./Cup` na cena; a linha do `./banana` está comentada em [yolo_3d_detection.py](IA368_ws/src/ia368_pkg/yolo_detector/yolo_3d_detection.py).
 
 ---
 
@@ -281,15 +335,15 @@ Use o botão **Nav2 Goal** (ou *2D Goal Pose*) para clicar no destino do robô. 
 
 ## Resumo rápido
 
-| Projeto | Cena (`.ttt`) | Comando |
-|---|---|---|
-| YOLO 3D | `yolo_detector/tf_scene.ttt` | `ros2 launch ia368_pkg yolo_detection.launch.py dummy:=0` |
-| Autodocking | `autodocking/Evaluation scene3.2_students.ttt` | `ros2 launch ia368_pkg remoteAPI_ROS2_bridge.launch.py` |
-| Controle de posição | `position_control/Exercise_position_control.ttt` | `ros2 launch ia368_pkg position_control.launch.py` |
-| Pega banana | `yolo_detector/pega_banana.ttt` | `ros2 launch ia368_pkg pega_banana.launch.py dummy:=0` |
-| SLAM Toolbox* | `slam_toolbox/p3_slam_toolbox.ttt` | `ros2 launch ia368_pkg slam_toolbox.launch.py` |
-| RTAB-Map | `rtabmap/p3dx_rtabmap.ttt` | `ros2 launch ia368_pkg rtabmap_rgbd.launch.py` |
-| Nav2* | `nav2/p3dx_nav2.ttt` ou `home.ttt` | `ros2 launch ia368_pkg nav2_{humble,jazzy}.launch.py` |
+| Projeto | Situação | Cena (`.ttt`) | Comando |
+|---|---|---|---|
+| YOLO 3D | ✅ | `yolo_detector/tf_scene.ttt` | `ros2 launch ia368_pkg yolo_detection.launch.py dummy:=0` |
+| Autodocking | ⚠️ falta o nó de docking | `autodocking/Evaluation scene3.2_students.ttt` | `ros2 launch ia368_pkg remoteAPI_ROS2_bridge.launch.py` |
+| Controle de posição | ⚠️ falta `control_law()` | `position_control/Exercise_position_control.ttt` | `ros2 launch ia368_pkg position_control.launch.py` |
+| Pega banana | ⚠️ falta o nó de controle | `yolo_detector/pega_banana.ttt` | `ros2 launch ia368_pkg pega_banana.launch.py dummy:=0` |
+| SLAM Toolbox* | ✅ | `slam_toolbox/p3_slam_toolbox.ttt` | `ros2 launch ia368_pkg slam_toolbox.launch.py` |
+| RTAB-Map | ✅ | `rtabmap/p3dx_rtabmap.ttt` | `ros2 launch ia368_pkg rtabmap_rgbd.launch.py` |
+| Nav2* | ✅ | `nav2/p3dx_nav2.ttt` ou `home.ttt` | `ros2 launch ia368_pkg nav2_{humble,jazzy}.launch.py` |
 
 \* Executar de dentro de `IA368_ws`.
 

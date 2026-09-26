@@ -12,9 +12,10 @@ class SiegwartController(Node):
         super().__init__("siegwart_position_controller")
 
         # Parameters (declared so they can be set via launch or CLI)
-        self.declare_parameter("Krho", 0.1)
-        self.declare_parameter("Kalpha", 0.1)
-        self.declare_parameter("Kbeta", 0.1)
+        # Stability (Siegwart): Krho > 0, Kbeta < 0, Kalpha - Krho > 0
+        self.declare_parameter("Krho", 0.3)
+        self.declare_parameter("Kalpha", 0.8)
+        self.declare_parameter("Kbeta", -0.15)
         self.declare_parameter("constantSpeed", 0.1)
         self.declare_parameter("backwardAllowed", False)
         self.declare_parameter("useconstantSpeed", False)
@@ -26,7 +27,7 @@ class SiegwartController(Node):
         self.Kbeta = self.get_parameter("Kbeta").value
         self.constantSpeed = self.get_parameter("constantSpeed").value
         self.backwardAllowed = self.get_parameter("backwardAllowed").value
-        self.constantSpeed = self.get_parameter("useconstantSpeed").value
+        self.useconstantSpeed = self.get_parameter("useconstantSpeed").value
         self.angle_threshold = self.get_parameter("angle_threshold").value
         self.dist_threshold = self.get_parameter("dist_threshold").value
 
@@ -72,10 +73,13 @@ class SiegwartController(Node):
     def control_law(self):
         dx = self.goal_pose.x - self.robot_pose.x
         dy = self.goal_pose.y - self.robot_pose.y
-        rho = math.hypot(dx, dy)  # distance to goal
+
+        # distance to goal
+        rho = math.hypot(dx, dy)  
         theta_goal = math.atan2(dy, dx)
         alpha = self.normalize_angle(theta_goal - self.robot_pose.theta)
-        beta = self.normalize_angle(-self.robot_pose.theta - alpha)
+        # beta measured w.r.t. the goal orientation (Siegwart assumes goal theta = 0)
+        beta = self.normalize_angle(self.goal_pose.theta - self.robot_pose.theta - alpha)
 
         twist = Twist()
         # Implement the Siegwart controller here.
@@ -87,11 +91,27 @@ class SiegwartController(Node):
         # backwardAllowed: This boolean variable should switch the between the two controllers
         # useConstantSpeed: Turn on constant speed option
         
-        # TODO: insert your code for vu and omega
-        vu = 0.0 # [m/s]
-        omega = 0.0 # [rad/s]
-        twist.linear.x = vu
-        twist.angular.z = omega
+        # Goal behind the robot (alpha outside (-pi/2, pi/2]): drive backward by
+        # redefining the robot heading as theta + pi, so alpha and beta shift by pi
+        direction = 1.0
+        if self.backwardAllowed and not (-math.pi / 2 < alpha <= math.pi / 2):
+            direction = -1.0
+            alpha = self.normalize_angle(alpha + math.pi)
+            beta = self.normalize_angle(beta + math.pi)
+
+        # Task 1: Siegwart control law
+        vu = direction * self.Krho * rho  # [m/s]
+        omega = self.Kalpha * alpha + self.Kbeta * beta  # [rad/s]
+
+        # Task 2: constant speed, scaling omega by the same factor as v keeps the
+        # path curvature (omega / v) and therefore the same trajectory
+        if self.useconstantSpeed and rho > self.dist_threshold:
+            scale = self.constantSpeed / (self.Krho * rho)
+            vu = direction * self.constantSpeed
+            omega *= scale
+
+        twist.linear.x = float(vu)
+        twist.angular.z = float(omega)
         return twist, rho
 
     def control_loop(self):
