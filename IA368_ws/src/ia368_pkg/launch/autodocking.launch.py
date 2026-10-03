@@ -14,7 +14,7 @@ Para subir só a ponte e rodar o controlador à mão (útil para depurar com
 
 Argumentos:
 
-    battery_low:=40.0   % de bateria em que o docking liga sozinho
+    battery_low:=95.0   % de bateria em que o docking liga sozinho
     angle_sign:=-1.0    inverte o sentido do giro, se o robô virar para o
                         lado errado ao seguir o beacon
 """
@@ -32,7 +32,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'battery_low', default_value='60.0',
+            'battery_low', default_value='95.0',
             description='nível de bateria (%) que liga o modo de docking'),
         DeclareLaunchArgument(
             'angle_sign', default_value='1.0',

@@ -132,8 +132,8 @@ Os quatro últimos não estão no enunciado; sem eles o docking trava na prátic
 ### 4.2 Quem liga e desliga o docking
 
 O nó liga o modo de docking sozinho quando a bateria cai abaixo de
-`battery_low` (40 % por padrão) e o desliga quando ela passa de `battery_full`
-(95 %), devolvendo o robô para a teleoperação. A bateria desta cena gasta **1 %
+`battery_low` (95 % por padrão) e o desliga quando ela chega a `battery_full`
+(100 %), devolvendo o robô para a teleoperação. A bateria desta cena gasta **1 %
 por segundo simulado** e começa em 100 %: são ~100 s de autonomia, e é por isso
 que o limiar é generoso.
 
@@ -258,7 +258,7 @@ esse padrão no log — força constante e erro indo a zero antes de perder o si
 
 ```bash
 ros2 run ia368_pkg autodocking_node --ros-args \
-    -p battery_low:=40.0 -p angle_sign:=1.0 -p approach_speed:=0.25
+    -p battery_low:=95.0 -p angle_sign:=1.0 -p approach_speed:=0.25
 ```
 
 | Parâmetro | Padrão | Para que serve |
@@ -269,8 +269,8 @@ ros2 run ia368_pkg autodocking_node --ros-args \
 | `strength_slow` | 0.85 | intensidade acima da qual anda devagar |
 | `align_threshold` | 0.35 rad | acima disso gira parado antes de avançar |
 | `search_angular_speed` / `search_spin_time` | 1.0 rad/s / 3.0 s | a volta no lugar que o enunciado pede |
-| `sweep_speed` / `sweep_growth` / `sweep_max_radius` | 0.18 m/s / 0.055 m/s / 1.4 m | a varredura em **espiral**: `r(t) = r0 + growth·t`, `w = v/r` |
-| `battery_low` / `battery_full` | 60.0 / 95.0 | % que liga e desliga o docking |
+| `sweep_speed` / `sweep_spacing` / `sweep_max_radius` | 0.25 m/s / 0.5 m / 1.5 m | a varredura em **espiral de Arquimedes**: `dr/dt = spacing·v / (2π·r)`, `w = v/r` (espaçamento constante entre voltas; ~55 s e ~2,7 voltas até 1,5 m) |
+| `battery_low` / `battery_full` | 95.0 / 100.0 | % que liga e desliga o docking |
 | `final_push_time` | 3.0 s | empurrão às cegas quando o beacon se cala junto à base |
 | `contact_wait` | 3.0 s | espera, após encostar, para ver se a carga começa |
 | `bumper_threshold` | 1.0 N | desvio da baseline que conta como colisão |
@@ -305,10 +305,20 @@ isto.)
 
 **Por que ESPIRAL e não arco de raio fixo.** Um arco de raio fixo é um círculo:
 ele volta ao ponto de partida e refaz o mesmo caminho, então não explora,
-oscila. A espiral abre o raio continuamente. E o que faz isso funcionar sem
+oscila. A espiral abre o raio a cada volta. E o que faz isso funcionar sem
 precisar cobrir área é a geometria: **o corredor sai radialmente da base, então
 qualquer laço que circunde a base o cruza.** Conforme a espiral abre, em algum
 momento ela passa a circundar a base — e aí acha.
+
+**Por que espiral de ARQUIMEDES.** A primeira versão fazia o raio crescer a uma
+taxa constante no tempo (`r = r0 + k·t`). Como cada volta demora `2π·r/v`, o
+raio crescia ~7x por volta — era uma espiral *logarítmica*: o robô dava ~1
+volta, já passava de `sweep_max_radius`, girava no lugar e recomeçava de outro
+ponto. Na prática, laços soltos que não cobriam a vizinhança (o sintoma de "a
+busca em espiral não funciona"). Agora o raio é integrado com
+`dr/dt = sweep_spacing·v / (2π·r)`, o que dá espaçamento constante
+(`sweep_spacing`) entre voltas vizinhas, e o raio já aberto é mantido através de
+um BACKUP (uma batida no sofá não faz a espiral recomeçar do zero).
 
 Cobrir área de verdade seria inviável: um disco de raio 1 m com 0,2 m de
 espaçamento entre voltas dá ~21 m de caminho, ~70 s a 0,3 m/s, e o robô só tem
@@ -325,10 +335,12 @@ docking ligou com 60%  ->  beacon achado com 41%  ->  encaixou com 38%
                            (19% na busca)            (3% na aproximação)
 ```
 
-Ou seja, ~22 % de bateria do momento em que o docking liga até encaixar. Daí o
-padrão `battery_low = 60`: com os 40 % que eu usava antes, o orçamento ficava
-do tamanho do custo e o robô morria no meio da busca — era exatamente o sintoma
-de "não consegue fazer o docking".
+Ou seja, ~22 % de bateria do momento em que o docking liga até encaixar. Com os 40 %
+usados antes, o orçamento ficava do tamanho do custo e o robô morria no meio da
+busca — era exatamente o sintoma de "não consegue fazer o docking". O padrão
+agora é `battery_low = 95` (e `battery_full = 100`, que precisa ficar acima): o
+docking liga ~5 s depois do início e o robô tem quase toda a bateria para a
+busca.
 
 **Variação.** Isoladamente, todos os padrões (arco e espiral, vários ajustes)
 acham o feixe em 4-8 s a partir dessa pose. A variação grande entre execuções do
@@ -338,7 +350,7 @@ números da espiral; o que reduz a variação é começar mais perto da base.
 
 **Recomendações práticas:**
 
-- Deixe `battery_low` generoso (60 % ou mais). É o parâmetro que decide entre
+- Deixe `battery_low` generoso (o padrão é 95 %). É o parâmetro que decide entre
   funcionar e não funcionar.
 - Para demonstrar com segurança, leve o robô para perto da base com a
   teleoperação e então ative o `docking_mode` — é o cenário que o enunciado
@@ -365,7 +377,8 @@ números da espiral; o que reduz a variação é começar mais perto da base.
 A bateria gasta **1 % por segundo** e carrega **1 % por segundo** (medido em
 [coppeliasim/battery.lua](coppeliasim/battery.lua): `energy_decay_rate` e
 `energy_charge_rate` = 1, a cada 1000 ms). Começando em 100 %, a autonomia é de
-~100 s; e carregar de 40 % até os 95 % que soltam o robô leva ~55 s na base.
+~100 s; e carregar até os 100 % que soltam o robô leva, no máximo, o tempo que
+faltava de bateria (ex.: ~40 s se encaixar com 60 %).
 
 O limite duro: **com a simulação rodando, cada chamada da Remote API custa
 ~12 ms**. Ela espera a vez entre passos de simulação, o que dá um teto de ~80
