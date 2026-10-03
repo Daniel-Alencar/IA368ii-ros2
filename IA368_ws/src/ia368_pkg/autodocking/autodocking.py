@@ -541,7 +541,10 @@ class AutoDocking(Node):
             self.set_docking_mode(True)
 
         elif (self.release_when_full and self.docking_mode
-                and self.battery >= self.battery_full):
+                and self.state == DOCKED and self.battery >= self.battery_full):
+            # Só solta o robô quando ele está NA BASE com a bateria cheia. Sem o
+            # `state == DOCKED`, ligar o docking à mão (checkbox da cena ou
+            # `ros2 topic pub`) com a bateria em 100 % o desligaria na hora.
             self.get_logger().info(
                 f'Bateria em {self.battery:.0f} %: desligando o modo de docking.')
             self.set_docking_mode(False)

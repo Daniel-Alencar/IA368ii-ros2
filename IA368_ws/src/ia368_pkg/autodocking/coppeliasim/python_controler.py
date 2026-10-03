@@ -13,7 +13,7 @@ O que ele faz, a cada passo de simulação:
            <h>rightVel     (override externo, tem prioridade)
 
 E, de quebra, atualiza os rótulos da janela do joystick com a bateria e a
-odometria, e marca o checkbox "docking" quando o sinal <h>Docking chega.
+odometria, e sincroniza o checkbox "docking" com o modo de docking (ver abaixo).
 
 <h> é o handle do robô na cena, então os sinais se chamam "84leftVel",
 "84Docking" e assim por diante.
@@ -30,6 +30,14 @@ MODIFICAÇÃO (ponte ROS 2 direta nas juntas):
     - chegou um override pelos sinais <h>leftVel/<h>rightVel;
     - a bateria acabou (o robô para, mesmo sob comando externo).
   Fora desses casos, os motores ficam com quem os comandou por último.
+
+MODIFICAÇÃO (checkbox "docking" -> ROS 2):
+  O checkbox "docking" da janela do joystick agora escreve o sinal int
+  <h>DockingRequest (1 marcado, 0 desmarcado). O docking_node o lê e publica
+  em /myRobot/docking_mode, então clicar no checkbox liga/desliga o docking do
+  autodocking_node sem esperar a bateria baixar. No sentido contrário, o sinal
+  <h>Docking (escrito pelo docking_node) agora marca E desmarca o checkbox,
+  para ele sempre mostrar o modo atual.
 """
 
 import math
@@ -180,6 +188,8 @@ def dockingButtonPressed(ui, id, newVal):
     #print(f"python_controller: docking mode {val}")
     msg = {'id': 'dockingMode', 'data': [val]}
     sim.broadcastMsg(msg)
+    # MODIFICAÇÃO: deixa o pedido visível para a ponte ROS 2 (docking_node).
+    sim.setInt32Signal(str(self.robotHandle) + "DockingRequest", 1 if val else 0)
 
 
 # =============================================================================
@@ -226,12 +236,16 @@ def sysCall_actuation():
 
     #check and set external docking mode setting
     #
-    # Só reage a 1: recebido, apaga o sinal e marca o checkbox, o que dispara
-    # dockingButtonPressed. Não há caminho para DESLIGAR o modo por sinal.
+    # MODIFICAÇÃO: a versão original só reagia a 1 (marcava o checkbox). Agora
+    # 0 também desmarca, senão o checkbox continuaria marcado depois de o
+    # autodocking desligar o docking, e o <h>DockingRequest = 1 que ele
+    # mantém religaria o docking. O pedido é atualizado aqui mesmo (e não só
+    # no callback) para não depender de o Qt disparar o evento.
     forceDocking = sim.getInt32Signal(str(self.robotHandle) + "Docking")
-    if forceDocking == 1:
+    if forceDocking is not None:
         sim.clearInt32Signal(str(self.robotHandle) + "Docking")
-        simUI.setCheckboxValue(ui, 10, 2, False)
+        simUI.setCheckboxValue(ui, 10, 2 if forceDocking == 1 else 0, True)
+        sim.setInt32Signal(str(self.robotHandle) + "DockingRequest", 1 if forceDocking == 1 else 0)
 
     # check and update odometry
     #
