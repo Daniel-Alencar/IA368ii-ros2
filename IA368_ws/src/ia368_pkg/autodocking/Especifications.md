@@ -320,3 +320,85 @@ Implementation of ROS 2 bridge code and demonstrate that:
 - Twist velocity commands can be sent through ROS 2 and correctly actuate the simulated robot using `sim.setJointTargetVelocity()` through the ZeroMQ Remote API.
 
 > **Do not implement the autonomous docking behavior yet.**
+
+---
+
+# 📘 Homework: External Docking Script with ROS 2
+
+## 🎯 Objective
+
+Use the simulation scene `Evaluation scene3.2_students.ttt` in CoppeliaSim and
+develop an external Python ROS 2 node that implements the auto-docking behavior.
+
+Unlike the previous homework (where docking was embedded inside a CoppeliaSim
+script), this time the logic must run **entirely outside of CoppeliaSim**, using
+only ROS 2 topics.
+
+---
+
+## 📝 Instructions
+
+1. Run the launch file from our ROS 2 package `remoteAPI_ROS2_bridge` (available
+   on GitHub), which now launches the modular nodes:
+
+   | Node | Role |
+   |---|---|
+   | `battery_node` | Publishes battery state. |
+   | `charging_base_node` | Publishes strength signal and relative angle from the dock. |
+   | `docking_node` | Receives docking mode commands and sets the docking signal in CoppeliaSim. |
+   | `bumper_and_velocity_node` | Receives bumper data and sends linear and angular velocity to CoppeliaSim. |
+
+2. Create a new script called `autodocking.py`.
+
+3. In `autodocking.py`, implement a ROS 2 node that:
+
+   - subscribes to `/myRobot/charging_base/strengthSignal`,
+     `/myRobot/charging_base/relativeAngle` and `/myRobot/battery_state`;
+
+   - publishes velocity commands to `/myRobot/cmd_vel`
+     (`geometry_msgs/msg/Twist`);
+
+   - subscribes bumper data from `/myRobot/bumper`
+     (`geometry_msgs/msg/Wrench`);
+
+   - sends docking state messages to `/myRobot/docking_mode`
+     (`std_msgs/msg/Int32`);
+
+   - implements a docking behavior, for example:
+
+     - if docking mode is ON and the dock signal is detected → approach the
+       dock using the relative angle;
+
+     - if the robot loses the signal during docking → rotate in place until it
+       re-acquires it;
+
+     - if the robot is charging → stop, and allow teleoperation or autonomous
+       behavior again when docking is OFF.
+
+---
+
+## ✅ Requirements
+
+- ROS 2 and `rclpy`.
+
+- CoppeliaSim with `coppeliasim_zmqremoteapi_client`.
+
+- Scene file: `Evaluation scene3.2_students.ttt`.
+
+---
+
+## 📂 Implementation in this repository
+
+| What | Where |
+|---|---|
+| The docking node | [autodocking.py](autodocking.py) (`autodocking_node`) |
+| Bridge + controller in one command | [autodocking.launch.py](../launch/autodocking.launch.py) |
+| Data flow and design notes | [FLUXO_COMUNICACAO.md](FLUXO_COMUNICACAO.md) |
+
+```bash
+ros2 launch ia368_pkg autodocking.launch.py
+```
+
+The node talks **only** ROS 2: it does not import
+`coppeliasim_zmqremoteapi_client` and knows nothing about scene handles or
+signals.

@@ -5,3 +5,9 @@ IA368_ws/log
 yolo11n-seg.pt
 
 .vscode
+build/
+install/
+log/
+
+__pycache__/
+*.pyc

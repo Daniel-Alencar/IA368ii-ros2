@@ -30,6 +30,7 @@ setup(
 	        "yolo_node = yolo_detector.yolo_3d_detection:main",
 	        "tf_node = yolo_detector.tf_node:main",
 	        "dummy_creation_node = yolo_detector.dummy_creation:main",
+	        "autodocking_node = autodocking.autodocking:main",
 	        "battery_node = autodocking.battery_node:main",
 	        "bumper_and_velocity_node = autodocking.bumper_and_velocity_node:main",
 	        "charging_base_node = autodocking.charging_base_node:main",
