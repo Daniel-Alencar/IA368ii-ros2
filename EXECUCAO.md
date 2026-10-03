@@ -131,7 +131,7 @@ Para visualizar: `rqt_image_view /yolo/annotated` ou `rviz2`.
 ## 2. Autodocking (ponte Remote API ↔ ROS 2 + docking autônomo)
 
 **Código:** [autodocking/](IA368_ws/src/ia368_pkg/autodocking/)
-**Cena:** [Evaluation scene3.2_students.ttt](IA368_ws/src/ia368_pkg/autodocking/Evaluation%20scene3.2_students.ttt) (também disponível no [Google Drive](https://drive.google.com/file/d/1kWkmB_3bF3PY6_6VbIV730ZlBTSmm2EU/view?usp=sharing)). Coloque-a no seu diretório `roomba docking`.
+**Cena:** [Evaluation scene3.2_students.ttt](IA368_ws/src/ia368_pkg/autodocking/coppeliasim/robot/Evaluation%20scene3.2_students.ttt) (também disponível no [Google Drive](https://drive.google.com/file/d/1kWkmB_3bF3PY6_6VbIV730ZlBTSmm2EU/view?usp=sharing)). Coloque-a no seu diretório `roomba docking`.
 
 ### Execução
 
@@ -200,7 +200,7 @@ O comportamento é uma máquina de estados:
 | `SWEEP` | a volta no lugar não achou nada: varre a vizinhança em **espiral** |
 | `DOCKED` | na base, carregando: parado |
 
-O docking liga sozinho abaixo de 60 % de bateria e desliga acima de 95 %, devolvendo o robô para a teleoperação. Para testar sem esperar a bateria baixar:
+O docking liga sozinho com 95 % de bateria (logo no início da simulação) e desliga quando ela chega a 100 %, devolvendo o robô para a teleoperação. Para testar sem esperar a bateria baixar:
 
 ```bash
 ros2 topic pub --once /myRobot/docking_mode std_msgs/msg/Int32 "{data: 1}"   # liga
@@ -215,9 +215,16 @@ O nó registra uma linha de status por segundo, que é a forma mais rápida de v
 
 > **Confira o referencial do ângulo.** O beacon da cena mede o `relativeAngle` no referencial do `/myRobot/dockingSensor`, não do corpo do robô. Nesta cena os dois coincidem (medido: a frente do robô é o eixo **+y** dele, e o `dockingSensor` está no nariz com o `+x` apontando para lá), então `angle_target = 0` como diz o enunciado. O sintoma de `angle_target` errado é traiçoeiro: o robô acha o beacon, gira para alinhar e **perde o sinal exatamente quando o erro chega a zero**, repetindo isso para sempre. Se você vir isso no log, é o `angle_target`. Se o robô girar para o lado contrário ao da base, é o `angle_sign:=-1.0`. Os demais parâmetros estão na seção 4.5 do [FLUXO_COMUNICACAO.md](IA368_ws/src/ia368_pkg/autodocking/FLUXO_COMUNICACAO.md).
 
-**Limitação principal, e o parâmetro que decide entre funcionar e não funcionar:** o feixe da base é um corredor estreito, e o `beacon.lua` só responde se o `dockingSensor` for o objeto **mais próximo** dentro dele (o sofá, as paredes e o corpo do robô competem). Fora desse corredor o beacon não publica nada e a busca é cega — o `SWEEP` em espiral acha o feixe porque qualquer laço que circunde a base cruza o corredor, mas os obstáculos fazem o custo variar muito. Medido no sistema completo, de uma pose a 0,5 m da base e fora do corredor: o docking ligou com 60 % de bateria, achou o beacon com 41 % e encaixou com 38 % — **~22 % de bateria**. Como a bateria gasta 1 % por segundo simulado, `battery_low = 40` (o padrão antigo) dava um orçamento do tamanho do custo e o robô morria no meio da busca. Por isso o padrão agora é **60 %**. Para demonstrar com segurança, leve o robô para perto da base com a teleoperação e só então ative o `docking_mode`; a aproximação em si custa ~3 %. Detalhes na seção 4.6 do [FLUXO_COMUNICACAO.md](IA368_ws/src/ia368_pkg/autodocking/FLUXO_COMUNICACAO.md).
+**Limitação principal, e o parâmetro que decide entre funcionar e não funcionar:** o feixe da base é um corredor estreito, e o `beacon.lua` só responde se o `dockingSensor` for o objeto **mais próximo** dentro dele (o sofá, as paredes e o corpo do robô competem). Fora desse corredor o beacon não publica nada e a busca é cega — o `SWEEP` em espiral acha o feixe porque qualquer laço que circunde a base cruza o corredor, mas os obstáculos fazem o custo variar muito. Medido no sistema completo, de uma pose a 0,5 m da base e fora do corredor: o docking ligou com 60 % de bateria, achou o beacon com 41 % e encaixou com 38 % — **~22 % de bateria**. Como a bateria gasta 1 % por segundo simulado, `battery_low = 40` (o padrão antigo) dava um orçamento do tamanho do custo e o robô morria no meio da busca. Por isso o padrão agora é **95 %**: o docking liga ~5 s depois do início e o robô tem quase toda a bateria para achar a base. Para demonstrar com segurança, leve o robô para perto da base com a teleoperação e só então ative o `docking_mode`; a aproximação em si custa ~3 %. Detalhes na seção 4.6 do [FLUXO_COMUNICACAO.md](IA368_ws/src/ia368_pkg/autodocking/FLUXO_COMUNICACAO.md).
 
-As cópias de referência dos scripts da cena (o `beacon.lua`, que define todo o protocolo, a `battery.lua` e o `dockingSensor_sensorScript.lua`) estão em [autodocking/coppeliasim/](IA368_ws/src/ia368_pkg/autodocking/coppeliasim/).
+Os scripts em [autodocking/coppeliasim/](IA368_ws/src/ia368_pkg/autodocking/coppeliasim/) **não precisam ser adicionados à cena**: os `.lua` (`beacon.lua`, que define todo o protocolo, `battery.lua`, `dockingSensor_sensorScript.lua` e `odometry.lua`) são cópias de referência de scripts que **já estão dentro** do `.ttt`. A única exceção é o `python_controler.py`: a cena original traz uma versão que reescreve as juntas a cada passo com o valor do joystick (zero) e apaga o `cmd_vel` da ponte. Instale a versão modificada uma vez, com a cena aberta e a simulação parada:
+
+```bash
+cd IA368_ws/src/ia368_pkg/autodocking/coppeliasim
+python3 apply_scene_patch.py --save
+```
+
+Sintoma de que falta o patch: o robô não se move com `ros2 topic pub /myRobot/cmd_vel ...`, embora o log do autodocking mostre os estados mudando.
 
 ---
 
@@ -391,7 +398,7 @@ Use o botão **Nav2 Goal** (ou *2D Goal Pose*) para clicar no destino do robô. 
 | Projeto | Situação | Cena (`.ttt`) | Comando |
 |---|---|---|---|
 | YOLO 3D | ✅ | `yolo_detector/tf_scene.ttt` | `ros2 launch ia368_pkg yolo_detection.launch.py dummy:=0` |
-| Autodocking | ✅ | `autodocking/Evaluation scene3.2_students.ttt` | `ros2 launch ia368_pkg autodocking.launch.py` |
+| Autodocking | ✅ | `autodocking/coppeliasim/robot/Evaluation scene3.2_students.ttt` | `ros2 launch ia368_pkg autodocking.launch.py` |
 | Controle de posição | ⚠️ falta `control_law()` | `position_control/Exercise_position_control.ttt` | `ros2 launch ia368_pkg position_control.launch.py` |
 | Pega banana | ⚠️ falta o nó de controle | `yolo_detector/pega_banana.ttt` | `ros2 launch ia368_pkg pega_banana.launch.py dummy:=0` |
 | SLAM Toolbox* | ✅ | `slam_toolbox/p3_slam_toolbox.ttt` | `ros2 launch ia368_pkg slam_toolbox.launch.py` |

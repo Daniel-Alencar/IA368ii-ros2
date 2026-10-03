@@ -120,7 +120,7 @@ from std_msgs.msg import Float32, Int32
 # Nomes dos estados. Strings (e não números) para o log sair legível.
 IDLE = 'IDLE'          # docking desligado: não comandamos nada, teleop livre
 SEARCH = 'SEARCH'      # girando no lugar à procura do feixe do beacon
-SWEEP = 'SWEEP'        # girar não achou: varre a vizinhança em arco
+SWEEP = 'SWEEP'        # girar não achou: varre a vizinhança em espiral
 APPROACH = 'APPROACH'  # beacon na mão: alinha pelo ângulo e avança
 FINAL = 'FINAL'        # perdeu o beacon encostando na base: empurra em frente
 CONTACT = 'CONTACT'    # encostou em algo com a base perto: para e espera a carga
@@ -162,16 +162,18 @@ class AutoDocking(Node):
 
         # --- Quando ligar e desligar o docking sozinho -----------------------
         # A bateria desta cena gasta 1 % por segundo simulado e começa em 100 %:
-        # são ~100 s até o robô parar. Ligar o docking aos 40 % deixa ~40 s para
-        # achar a base, que é folgado para a cena.
+        # são ~100 s até o robô parar.
         self.declare_parameter('auto_dock_on_low_battery', True)
-        # 60 %, e não 40 %, porque o orçamento é apertado: medido nesta cena, a
-        # BUSCA do feixe leva de alguns segundos a ~45 s (depende de onde o robô
-        # está), e a aproximação depois disso ~5 s. A 1 % por segundo, ligar o
-        # docking com 40 % dava 40 s e o robô morria antes de achar a base.
-        self.declare_parameter('battery_low', 60.0)    # % para ligar o docking
+        # 95 %: o docking liga ~5 s depois do início da simulação, e o robô tem
+        # ~95 s para achar a base. Com a bateria gastando 1 % por segundo, a
+        # BUSCA do feixe (que pode passar de 45 s, conforme a posição inicial e
+        # os obstáculos) é o que mais consome, então quanto antes começar,
+        # melhor.
+        self.declare_parameter('battery_low', 95.0)    # % para ligar o docking
         self.declare_parameter('release_when_full', True)
-        self.declare_parameter('battery_full', 95.0)   # % para desligar o docking
+        # 100 %, e não 95 %: battery_low precisa ficar ABAIXO de battery_full
+        # (senão o modo oscila), e a bateria da cena satura em exatamente 100.
+        self.declare_parameter('battery_full', 100.0)  # % para desligar o docking
 
         # --- Beacon ----------------------------------------------------------
         # Sem mensagem nova por este tempo, consideramos o beacon perdido (o
@@ -231,37 +233,43 @@ class AutoDocking(Node):
         # a volta curta e barata, e a busca de verdade é o SWEEP.
         self.declare_parameter('search_angular_speed', 1.0)  # rad/s girando
         self.declare_parameter('search_spin_time', 3.0)      # s
-        # SWEEP: varredura em ESPIRAL. O feixe da base é um corredor estreito
-        # (medido nesta cena: uma única direção, mais estreita que +-30°, até
-        # ~1,2-1,5 m), e para entrar nele o robô precisa trocar de POSIÇÃO.
+        # SWEEP: varredura em ESPIRAL DE ARQUIMEDES. O feixe da base é um
+        # corredor estreito (medido nesta cena: uma única direção, mais estreita
+        # que +-30°, até ~1,2-1,5 m), e para entrar nele o robô precisa trocar
+        # de POSIÇÃO.
         #
         # Por que espiral e não arco de raio fixo: um arco de raio fixo é um
         # CÍRCULO — ele volta ao ponto de partida e refaz o mesmo caminho, então
-        # não explora, oscila. A espiral abre o raio continuamente, cobrindo
-        # área nova a cada volta:
+        # não explora, oscila. A espiral abre o raio a cada volta.
         #
-        #     r(t) = r0 + sweep_growth * t        (r0 = sweep_speed / w_max)
-        #     w(t) = sweep_speed / r(t)           (limitado a sweep_angular_max)
+        # Por que de ARQUIMEDES: o espaçamento entre duas voltas vizinhas é
+        # constante (sweep_spacing). A versão anterior fazia o raio crescer a
+        # uma taxa constante NO TEMPO (r = r0 + k*t); como cada volta demora
+        # 2*pi*r/v, o raio crescia ~7x por volta (era uma espiral LOGARÍTMICA):
+        # o robô dava ~1 volta, já passava de sweep_max_radius e recomeçava de
+        # outro ponto — na prática, laços soltos sem cobrir a vizinhança. Para o
+        # espaçamento por volta ser constante, dr/dtheta = spacing / (2*pi), e
+        # com dtheta/dt = v/r:
         #
-        # Começa apertada em volta do robô e vai abrindo. Ao passar de
-        # sweep_max_radius a espiral recomeça, invertendo o lado.
+        #     dr/dt = sweep_spacing * v / (2*pi*r)
+        #     w     = v / r                        (limitado a sweep_angular_max)
+        #
+        # Começa apertada em volta do robô (r0 = v / w_max) e vai abrindo. Ao
+        # passar de sweep_max_radius a espiral recomeça, invertendo o lado.
         #
         # Por que a espiral acha o corredor sem precisar cobrir área: o corredor
         # sai RADIALMENTE da base, então qualquer laço que CIRCUNDE a base o
         # cruza. Como a espiral abre o raio, em algum momento ela passa a
-        # circundar a base — e aí acha. Cobrir área de verdade seria inviável
-        # com esta bateria: um disco de raio 1 m com 0,2 m de espaçamento dá
-        # ~21 m de caminho, ~70 s a 0,3 m/s, e o robô só tem ~100 s de vida.
+        # circundar a base — e aí acha. O espaçamento só precisa ser menor que
+        # o alcance do feixe (~1,2 m) para nenhuma volta "pular" o corredor.
         #
-        # Estes valores são os que encaixaram de ponta a ponta na cena real.
-        # Medindo os padrões isoladamente (com o portão real do beacon), arco e
-        # espiral acham o feixe em 4-8 s a partir de uma pose a 0,5 m da base;
-        # a variação entre execuções do nó inteiro vem dos obstáculos, não do
-        # padrão, então não vale apertar mais estes números.
-        self.declare_parameter('sweep_speed', 0.18)          # m/s
+        # Tempo para chegar ao raio R: t = pi * (R² - r0²) / (spacing * v).
+        # Com os valores abaixo: ~55 s e ~2,7 voltas até 1,5 m (a 1 % de bateria
+        # por segundo, por isso o docking liga cedo, em battery_low = 95 %).
+        self.declare_parameter('sweep_speed', 0.25)          # m/s
         self.declare_parameter('sweep_angular_max', 1.0)     # rad/s (giro mais fechado)
-        self.declare_parameter('sweep_growth', 0.055)        # m de raio por segundo
-        self.declare_parameter('sweep_max_radius', 1.4)      # m, quando recomeça
+        self.declare_parameter('sweep_spacing', 0.5)         # m entre voltas vizinhas
+        self.declare_parameter('sweep_max_radius', 1.5)      # m, quando recomeça
 
         # --- Para-choque -----------------------------------------------------
         # O sensor de força mede o peso do para-choque mesmo com o robô livre,
@@ -310,7 +318,7 @@ class AutoDocking(Node):
         self.search_spin_time = p('search_spin_time')
         self.sweep_speed = p('sweep_speed')
         self.sweep_angular_max = p('sweep_angular_max')
-        self.sweep_growth = p('sweep_growth')
+        self.sweep_spacing = p('sweep_spacing')
         self.sweep_max_radius = p('sweep_max_radius')
         self.bumper_threshold = p('bumper_threshold')
         self.bumper_calibration_samples = p('bumper_calibration_samples')
@@ -370,6 +378,12 @@ class AutoDocking(Node):
         # Sentido do giro na busca: +1 = esquerda. Começa para a esquerda e
         # passa a apontar para o lado onde o beacon foi visto por último.
         self.search_direction = 1.0
+        # Raio atual da espiral do SWEEP [m]. None = começar uma espiral nova.
+        # Fica guardado através do BACKUP, para uma batida no meio da varredura
+        # não jogar fora o raio já aberto.
+        self.sweep_r = None
+        self.last_step_time = time.monotonic()
+        self.dt = 1.0 / self.control_rate
         # Quantas vezes encostamos em algo sem conseguir carregar, seguidas.
         self.contact_failures = 0
         self.last_docking_publish = 0.0
@@ -570,6 +584,11 @@ class AutoDocking(Node):
 
     def step(self):
         """Chamado pelo timer (10 Hz): observa, decide e comanda."""
+        now = time.monotonic()
+        # dt real do laço (limitado, para uma pausa longa não dar um salto).
+        self.dt = min(now - self.last_step_time, 0.5)
+        self.last_step_time = now
+
         # Ponte muda ou simulação parada: para o robô e não decide nada. Sem
         # isto o robô sairia com o último comando para sempre, porque o
         # bumper_and_velocity_node não tem prazo de validade.
@@ -606,9 +625,15 @@ class AutoDocking(Node):
         elif self.charging:
             # Chegou na base: o enunciado pede parar e esperar.
             self.enter(DOCKED)
+        elif self.state == DOCKED and self.battery is not None and self.battery >= 99.5:
+            # Na base com a bateria cheia: ela satura em 100 e para de subir,
+            # então a evidência de carga "bateria subindo" some. Isso NÃO quer
+            # dizer que saímos da base; continuamos em DOCKED.
+            pass
         elif self.state in (IDLE, DOCKED):
             # Docking ligado (e não carregando): começa a procurar. Se o beacon
             # já estiver visível, vai direto para a aproximação.
+            self.sweep_r = None  # busca nova: espiral nova
             self.enter(APPROACH if self.signal_detected() else SEARCH)
 
         cmd = {
@@ -652,7 +677,7 @@ class AutoDocking(Node):
 
         if self.state_elapsed() > self.search_spin_time:
             # A volta no lugar não achou: o robô está fora do corredor do feixe.
-            # Trocar de posição é a única saída -> varredura em arco.
+            # Trocar de posição é a única saída -> varredura em espiral.
             self.enter(SWEEP)
             return self.run_sweep()
 
@@ -660,10 +685,9 @@ class AutoDocking(Node):
         cmd.angular.z = self.search_angular_speed * self.search_direction
         return cmd
 
-    def sweep_radius(self):
-        """Raio da espiral neste instante do estado SWEEP."""
-        r0 = self.sweep_speed / self.sweep_angular_max
-        return r0 + self.sweep_growth * self.state_elapsed()
+    def sweep_r0(self):
+        """Raio inicial da espiral: o giro mais fechado permitido."""
+        return self.sweep_speed / self.sweep_angular_max
 
     def run_sweep(self):
         """Varre a vizinhança em ESPIRAL, procurando o feixe da base.
@@ -682,18 +706,25 @@ class AutoDocking(Node):
             self.enter(BACKUP)
             return self.run_backup()
 
-        radius = self.sweep_radius()
-        if radius > self.sweep_max_radius:
+        if self.sweep_r is None:
+            self.sweep_r = self.sweep_r0()
+
+        if self.sweep_r > self.sweep_max_radius:
             # Espiral esgotada: recomeça do raio pequeno, pelo outro lado, com
             # uma olhada girando no lugar no meio.
+            self.sweep_r = None
             self.search_direction = -self.search_direction
             self.enter(SEARCH)
             return self.run_search()
 
+        radius = self.sweep_r
         cmd = Twist()
         cmd.linear.x = self.sweep_speed
         cmd.angular.z = min(self.sweep_angular_max,
                             self.sweep_speed / radius) * self.search_direction
+
+        # Espiral de Arquimedes: o raio cresce sweep_spacing por volta.
+        self.sweep_r += self.sweep_spacing * self.sweep_speed / (2.0 * math.pi * radius) * self.dt
         return cmd
 
     def run_approach(self):
@@ -719,6 +750,9 @@ class AutoDocking(Node):
                 # dockingSensor, não o robô se perdendo. Empurra em frente.
                 self.enter(FINAL)
                 return self.run_final()
+            # Sinal perdido longe da base: a próxima varredura começa do zero,
+            # centrada aqui (onde o feixe acabou de ser visto).
+            self.sweep_r = None
             # Guarda para que lado a base estava, para girar para o lado certo.
             if self.relative_angle is not None:
                 error = self.angle_error()
