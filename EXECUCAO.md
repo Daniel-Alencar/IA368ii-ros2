@@ -198,9 +198,19 @@ O comportamento é uma máquina de estados:
 | `CONTACT` | encostou em algo: para e espera para ver se a carga começa |
 | `BACKUP` | não era a base: recua e tenta de novo pelo outro lado |
 | `SWEEP` | a volta no lugar não achou nada: varre a vizinhança em **espiral** |
+| `CLEAN` | docking OFF: limpeza "bate e volta" |
+| `UNDOCK` | saindo da base com o docking OFF: ré e meia-volta antes de limpar |
 | `DOCKED` | na base, carregando: parado |
 
-Por padrão o docking **só começa quando você marca o checkbox "docking"** (o checkbox começa desmarcado) e desliga quando o robô está na base com 100 %, devolvendo-o para a teleoperação. Para ele ligar sozinho com a bateria baixa (95 %), use `ros2 launch ia368_pkg autodocking.launch.py auto_dock:=true`. Parar a simulação também desliga o docking, então dar play de novo começa com ele desligado.
+O ciclo completo, como pede a atividade:
+
+1. **Limpeza** (docking OFF): o robô anda em frente e, a cada batida no para-choque, recua e gira um ângulo aleatório (cobertura "bate e volta"). O checkbox "docking" começa desmarcado.
+2. **Docking ON** por qualquer um dos dois caminhos: a **bateria baixa** (70 %, `battery_low`) ou o **checkbox "docking"** da janela do joystick, com qualquer nível de bateria. Nos dois casos o checkbox fica marcado.
+3. **Busca e aproximação:** gira no lugar e varre em espiral até achar o feixe; segue o `relativeAngle` até a base; perto dela, onde o para-choque tapa o sensor e o sinal some, empurra em frente até carregar.
+4. **Recuperação:** perdendo o sinal no caminho, volta a girar no lugar (para o lado em que a base estava) e, se não reencontrar, a varrer; batendo em parede/móvel, recua, vira e continua.
+5. **Docking OFF** quando o robô está na base com 100 % (ou ao desmarcar o checkbox): o robô dá ré, meia-volta e **volta a limpar**.
+
+Parar a simulação também desliga o docking. Argumentos do launch: `auto_dock:=false` (docking só pelo checkbox), `battery_low:=80.0`, `clean:=false` (com o docking OFF, deixa a teleoperação em vez de limpar).
 
 **Checkbox "docking" da janela do joystick:** marcar liga o docking na hora (com qualquer nível de bateria) e desmarcar desliga. O checkbox também acompanha o modo atual quando o docking liga ou desliga sozinho. Requer a versão modificada do `python_controler` na cena (`apply_scene_patch.py --save`, ver abaixo): ela escreve o sinal `<h>DockingRequest`, que o `docking_node` publica em `/myRobot/docking_mode`.
 

@@ -17,7 +17,9 @@ Interface ROS 2 usada (e só ela):
 
 Máquina de estados:
 
-      de qualquer estado, docking OFF  ──▶  IDLE
+      de qualquer estado, docking OFF  ──▶  CLEAN (limpeza; ou IDLE, se
+                                             clean_when_idle = False), passando
+                                             por UNDOCK se estava na base
       de qualquer estado, carregando   ──▶  DOCKED
 
       ┌──────┐ docking ON  ┌────────┐   beacon    ┌──────────┐ carregando ┌────────┐
@@ -48,6 +50,12 @@ Comportamento pedido no enunciado, estado por estado:
   - robô carregando                    -> DOCKED, parado; quando o docking é
                                           desligado volta para IDLE e a
                                           teleoperação fica livre de novo.
+
+Com o docking OFF o robô LIMPA (estado CLEAN): anda em frente e, a cada
+batida no para-choque, recua e gira um ângulo aleatório — a cobertura "bate e
+volta" dos aspiradores-robô. Ao sair da base (docking desligado com a bateria
+cheia) ele passa antes por UNDOCK: recua e dá meia-volta, para não ficar
+empurrando a base.
 
 Os estados SWEEP, FINAL, CONTACT e BACKUP não estão no enunciado; eles existem
 porque sem eles o docking trava na prática, e os três últimos vêm de ler o
@@ -106,6 +114,7 @@ Para testar à mão, sem esperar a bateria baixar:
     ros2 topic pub --once /myRobot/docking_mode std_msgs/msg/Int32 "{data: 0}"
 """
 import math
+import random
 import time
 
 import rclpy
@@ -119,6 +128,8 @@ from std_msgs.msg import Float32, Int32
 
 # Nomes dos estados. Strings (e não números) para o log sair legível.
 IDLE = 'IDLE'          # docking desligado: não comandamos nada, teleop livre
+CLEAN = 'CLEAN'        # docking desligado: limpeza autônoma (bate e volta)
+UNDOCK = 'UNDOCK'      # saindo da base: recua e dá meia-volta antes de limpar
 SEARCH = 'SEARCH'      # girando no lugar à procura do feixe do beacon
 SWEEP = 'SWEEP'        # girar não achou: varre a vizinhança em espiral
 APPROACH = 'APPROACH'  # beacon na mão: alinha pelo ângulo e avança
@@ -163,16 +174,16 @@ class AutoDocking(Node):
         # --- Quando ligar e desligar o docking sozinho -----------------------
         # A bateria desta cena gasta 1 % por segundo simulado e começa em 100 %:
         # são ~100 s até o robô parar.
-        # Desligado por padrão: o docking só começa quando o usuário marca o
-        # checkbox "docking" da janela do joystick (ou publica em
-        # /myRobot/docking_mode). Com True, liga sozinho em battery_low.
-        self.declare_parameter('auto_dock_on_low_battery', False)
-        # 95 %: o docking liga ~5 s depois do início da simulação, e o robô tem
-        # ~95 s para achar a base. Com a bateria gastando 1 % por segundo, a
-        # BUSCA do feixe (que pode passar de 45 s, conforme a posição inicial e
-        # os obstáculos) é o que mais consome, então quanto antes começar,
-        # melhor.
-        self.declare_parameter('battery_low', 95.0)    # % para ligar o docking
+        # Duas formas de ligar o docking, como pede a atividade: o checkbox
+        # "docking" da janela do joystick (que chega por /myRobot/docking_mode)
+        # e a bateria baixa, abaixo de battery_low.
+        self.declare_parameter('auto_dock_on_low_battery', True)
+        # 70 %: a bateria gasta 1 % por segundo simulado, e a BUSCA do feixe
+        # leva de alguns segundos a mais de um minuto, conforme onde o robô
+        # parou de limpar. Numa simulação 2D da cena (40 posições iniciais),
+        # ligar com 60 % achou a base em 65 % das vezes; com 70 %, em 75 %;
+        # com 80 %, em 80 %. O checkbox liga o docking com qualquer bateria.
+        self.declare_parameter('battery_low', 70.0)    # % para ligar o docking
         self.declare_parameter('release_when_full', True)
         # 100 %, e não 95 %: battery_low precisa ficar ABAIXO de battery_full
         # (senão o modo oscila), e a bateria da cena satura em exatamente 100.
@@ -226,7 +237,12 @@ class AutoDocking(Node):
         self.declare_parameter('approach_speed', 0.25)  # m/s indo para a base
         self.declare_parameter('final_speed', 0.05)     # m/s já perto da base
         # Erro de alinhamento acima do qual o robô gira PARADO antes de avançar.
-        self.declare_parameter('align_threshold', 0.35)  # rad (~20°)
+        # Abaixo dele avança com v = approach_speed * cos(erro), corrigindo a
+        # direção em movimento. Não deixe pequeno: girar parado na borda do
+        # feixe (estreito) tira o dockingSensor, que fica 9 cm à frente do
+        # centro, de dentro dele. Numa simulação 2D da cena, 0,35 rad perdia o
+        # sinal em ~15 % das aproximações; 0,8 rad, em ~5 %.
+        self.declare_parameter('align_threshold', 0.8)   # rad (~45°)
 
         # --- Busca -----------------------------------------------------------
         # Girar no lugar é o que o enunciado pede quando o sinal é perdido, e é
@@ -260,19 +276,34 @@ class AutoDocking(Node):
         # Começa apertada em volta do robô (r0 = v / w_max) e vai abrindo. Ao
         # passar de sweep_max_radius a espiral recomeça, invertendo o lado.
         #
-        # Por que a espiral acha o corredor sem precisar cobrir área: o corredor
-        # sai RADIALMENTE da base, então qualquer laço que CIRCUNDE a base o
-        # cruza. Como a espiral abre o raio, em algum momento ela passa a
-        # circundar a base — e aí acha. O espaçamento só precisa ser menor que
-        # o alcance do feixe (~1,2 m) para nenhuma volta "pular" o corredor.
+        # A base fica encostada numa parede, então nenhum laço a circunda por
+        # inteiro; o que a espiral faz é cruzar o corredor (que sai da base para
+        # dentro do cômodo) quando uma volta passa na frente dela. As batidas
+        # nas paredes são tratadas no BACKUP: ré, giro de ~150° e a espiral
+        # segue com o raio já aberto. O espaçamento precisa ser menor que o
+        # alcance do feixe (~1,2 m) para nenhuma volta "pular" o corredor.
         #
         # Tempo para chegar ao raio R: t = pi * (R² - r0²) / (spacing * v).
         # Com os valores abaixo: ~55 s e ~2,7 voltas até 1,5 m (a 1 % de bateria
         # por segundo, por isso o docking liga cedo, em battery_low = 95 %).
+        # 'spiral' (padrão) ou 'bounce' (retas com giros aleatórios). Medido
+        # numa simulação 2D da cena, a espiral acha a base mais vezes.
+        self.declare_parameter('search_pattern', 'spiral')
         self.declare_parameter('sweep_speed', 0.25)          # m/s
         self.declare_parameter('sweep_angular_max', 1.0)     # rad/s (giro mais fechado)
         self.declare_parameter('sweep_spacing', 0.5)         # m entre voltas vizinhas
         self.declare_parameter('sweep_max_radius', 1.5)      # m, quando recomeça
+
+        # --- Limpeza (docking OFF) ------------------------------------------
+        # False = em vez de limpar, o nó fica calado e a teleoperação manda.
+        self.declare_parameter('clean_when_idle', True)
+        self.declare_parameter('clean_speed', 0.2)           # m/s em frente
+        self.declare_parameter('clean_turn_speed', 1.0)      # rad/s girando
+        self.declare_parameter('clean_reverse_time', 1.0)    # s de ré após batida
+        # Sem batida por este tempo, gira mesmo assim: evita ficar preso de
+        # lado numa parede que o para-choque (frontal) não sente.
+        self.declare_parameter('clean_max_straight', 15.0)   # s
+        self.declare_parameter('undock_time', 2.0)           # s de ré saindo da base
 
         # --- Para-choque -----------------------------------------------------
         # O sensor de força mede o peso do para-choque mesmo com o robô livre,
@@ -288,11 +319,19 @@ class AutoDocking(Node):
         # /chargingBase/beacon só responde se o objeto detectado for exatamente
         # o dockingSensor). Perder o sinal assim não é "me perdi", é "cheguei":
         # em vez de girar, o robô empurra em frente por este tempo.
-        self.declare_parameter('final_push_time', 3.0)       # s
+        self.declare_parameter('final_push_time', 3.0)       # s de folga
+        # Perdendo o sinal acima desta intensidade e alinhado, empurra em
+        # frente (FINAL) em vez de procurar: 0,7 = 0,6 m da base.
+        self.declare_parameter('final_strength', 0.7)
+        self.declare_parameter('final_push_speed', 0.08)     # m/s às cegas
+        # volume_range do feixe (beacon.lua): distância = (1 - força) * range.
+        self.declare_parameter('beacon_range', 2.0)          # m
         self.declare_parameter('contact_wait', 3.0)          # s
         self.declare_parameter('backup_speed', 0.12)         # m/s de ré
         self.declare_parameter('backup_turn', 0.5)           # rad/s ao recuar
         self.declare_parameter('backup_time', 1.5)           # s
+        # Giro depois da ré, para sair de costas para o obstáculo.
+        self.declare_parameter('backup_escape_angle', 2.6)   # rad (~150°)
         # Cada tentativa frustrada recua mais que a anterior (x1, x1,5, x2...),
         # para o robô contornar o obstáculo em vez de voltar a bater no mesmo
         # ponto. Limitado a `backup_escalation_max` tentativas.
@@ -319,17 +358,29 @@ class AutoDocking(Node):
         self.align_threshold = p('align_threshold')
         self.search_angular_speed = p('search_angular_speed')
         self.search_spin_time = p('search_spin_time')
+        self.search_pattern = p('search_pattern')
         self.sweep_speed = p('sweep_speed')
         self.sweep_angular_max = p('sweep_angular_max')
         self.sweep_spacing = p('sweep_spacing')
         self.sweep_max_radius = p('sweep_max_radius')
+        self.clean_when_idle = p('clean_when_idle')
+        self.clean_speed = p('clean_speed')
+        self.clean_turn_speed = p('clean_turn_speed')
+        self.clean_reverse_time = p('clean_reverse_time')
+        self.clean_max_straight = p('clean_max_straight')
+        self.undock_time = p('undock_time')
         self.bumper_threshold = p('bumper_threshold')
         self.bumper_calibration_samples = p('bumper_calibration_samples')
         self.final_push_time = p('final_push_time')
+        self.final_strength = p('final_strength')
+        self.final_push_speed = p('final_push_speed')
+        self.beacon_range = p('beacon_range')
+        self.final_distance = 0.0
         self.contact_wait = p('contact_wait')
         self.backup_speed = p('backup_speed')
         self.backup_turn = p('backup_turn')
         self.backup_time = p('backup_time')
+        self.backup_escape_angle = p('backup_escape_angle')
         self.backup_escalation = p('backup_escalation')
         self.backup_escalation_max = p('backup_escalation_max')
 
@@ -358,13 +409,14 @@ class AutoDocking(Node):
         # =====================================================================
         self.battery = None             # % (0 a 100), None até a 1ª mensagem
         self.last_battery = None        # amostra anterior, para ver se subiu
+        self.battery_in_percent = False  # já vimos leitura > 1 (escala 0..100)
         self.battery_status = None      # power_supply_status da mensagem
         self.battery_time = 0.0         # monotonic da última mensagem de bateria
         self.data_lost_warned = False
         self.strength = 0.0             # intensidade do beacon
         self.relative_angle = None      # rad; None enquanto nunca vimos o beacon
         self.beacon_time = 0.0          # monotonic da última leitura do beacon
-        self.charging_time = 0.0        # monotonic da última evidência de carga
+        self.charging_time = float('-inf')  # monotonic da última evidência de carga
         self.charging = False
         # Para-choque: a baseline é a média das primeiras leituras.
         self.bumper_samples = []
@@ -385,8 +437,19 @@ class AutoDocking(Node):
         # Fica guardado através do BACKUP, para uma batida no meio da varredura
         # não jogar fora o raio já aberto.
         self.sweep_r = None
+        self.backup_from_sweep = False
+        self.backup_skip_reverse = False
+        self.backup_turn_time = None
+        # Sentido do giro parado do APPROACH no último ciclo (0 = andando).
+        self.approach_turning = 0.0
         self.last_step_time = time.monotonic()
         self.dt = 1.0 / self.control_rate
+        # Limpeza: fase atual ('forward', 'reverse' ou 'turn'), quando começou,
+        # e quanto tempo dura o giro sorteado.
+        self.clean_phase = 'forward'
+        self.clean_phase_time = time.monotonic()
+        self.clean_turn_time = 0.0
+        self.clean_turn_dir = 1.0
         # Quantas vezes encostamos em algo sem conseguir carregar, seguidas.
         self.contact_failures = 0
         self.last_docking_publish = 0.0
@@ -433,11 +496,16 @@ class AutoDocking(Node):
         A ponte (battery_node) preenche `percentage` em 0..100, mas a convenção
         da mensagem BatteryState do ROS 2 é 0..1. Aceitamos as duas: valor acima
         de 1 já está em porcentagem; abaixo, multiplicamos por 100. (O caso
-        ambíguo é uma bateria realmente abaixo de 1 %, perto do fim da vida —
-        irrelevante aqui, porque o docking liga muito antes disso.)
+        ambíguo é uma bateria abaixo de 1 %: por isso, depois de ver uma
+        leitura acima de 1, a escala 0..100 fica fixa.)
         """
         percentage = msg.percentage
-        self.battery = percentage if percentage > 1.0 else percentage * 100.0
+        # A escala é decidida pela 1ª leitura acima de 1 e fica valendo: senão
+        # uma bateria em 1 % (percentage = 1.0) viraria 100 %, pareceria
+        # "subir" e o nó acharia que está carregando longe da base.
+        if percentage > 1.0:
+            self.battery_in_percent = True
+        self.battery = percentage if self.battery_in_percent else percentage * 100.0
         self.battery_status = msg.power_supply_status
         self.battery_time = time.monotonic()
 
@@ -518,7 +586,7 @@ class AutoDocking(Node):
             if self.battery > self.last_battery:
                 self.charging_time = now
             elif self.battery < self.last_battery:
-                self.charging_time = 0.0  # descarregando: decide na hora
+                self.charging_time = float('-inf') # descarregando: decide na hora
         self.last_battery = self.battery
 
         self.charging = (now - self.charging_time) <= hold
@@ -573,6 +641,8 @@ class AutoDocking(Node):
         self.get_logger().info(f'{self.state} -> {state}')
         self.state = state
         self.state_time = time.monotonic()
+        if state == BACKUP:
+            self.backup_turn_time = None   # sorteia o giro de saída de novo
 
     def state_elapsed(self):
         """Segundos desde a entrada no estado atual."""
@@ -637,10 +707,17 @@ class AutoDocking(Node):
 
         # Transições que valem em qualquer estado ativo.
         if not self.docking_mode:
-            # Docking desligado: largamos o controle do robô. A transição para
-            # IDLE manda um Twist zerado (ver run_idle), e depois ficamos
-            # calados para não atropelar a teleoperação.
-            self.enter(IDLE)
+            # Docking desligado: a limpeza volta (ou, com clean_when_idle =
+            # False, largamos o robô para a teleoperação em IDLE).
+            if not self.clean_when_idle or self.bumper_baseline is None:
+                # Sem limpeza (ou para-choque ainda calibrando: o robô precisa
+                # estar parado). IDLE manda um Twist zerado e se cala.
+                self.enter(IDLE)
+            elif self.state in (DOCKED, CONTACT, FINAL):
+                # Estava na base (ou encostando nela): sai de ré antes.
+                self.enter(UNDOCK)
+            elif self.state not in (CLEAN, UNDOCK):
+                self.start_cleaning()
         elif self.charging:
             # Chegou na base: o enunciado pede parar e esperar.
             self.enter(DOCKED)
@@ -649,7 +726,7 @@ class AutoDocking(Node):
             # então a evidência de carga "bateria subindo" some. Isso NÃO quer
             # dizer que saímos da base; continuamos em DOCKED.
             pass
-        elif self.state in (IDLE, DOCKED):
+        elif self.state in (IDLE, DOCKED, CLEAN, UNDOCK):
             # Docking ligado (e não carregando): começa a procurar. Se o beacon
             # já estiver visível, vai direto para a aproximação.
             self.sweep_r = None  # busca nova: espiral nova
@@ -664,6 +741,8 @@ class AutoDocking(Node):
             CONTACT: self.run_contact,
             BACKUP: self.run_backup,
             DOCKED: self.run_docked,
+            CLEAN: self.run_clean,
+            UNDOCK: self.run_undock,
         }[self.state]()
 
         # cmd é None quando o estado não quer comandar o robô (só em IDLE).
@@ -683,6 +762,67 @@ class AutoDocking(Node):
         if self.state_elapsed() < 1.0 / self.control_rate * 3:
             return Twist()
         return None
+
+    # ---- Limpeza (docking OFF) ---------------------------------------------
+
+    def start_cleaning(self):
+        """Entra em CLEAN, começando por andar em frente."""
+        self.enter(CLEAN)
+        self.set_clean_phase('forward')
+
+    def set_clean_phase(self, phase):
+        self.clean_phase = phase
+        self.clean_phase_time = time.monotonic()
+        if phase == 'turn':
+            # Ângulo aleatório entre 90° e 180°, para um lado aleatório: é o que
+            # espalha a trajetória pelo cômodo em vez de repetir o mesmo trecho.
+            angle = random.uniform(math.pi / 2, math.pi)
+            self.clean_turn_time = angle / self.clean_turn_speed
+            self.clean_turn_dir = random.choice((-1.0, 1.0))
+
+    def run_clean(self):
+        """Limpeza "bate e volta": em frente até bater, ré, giro aleatório."""
+        elapsed = time.monotonic() - self.clean_phase_time
+        cmd = Twist()
+
+        if self.clean_phase == 'forward':
+            if self.bumper_hit():
+                self.set_clean_phase('reverse')
+                return self.run_clean()
+            if elapsed > self.clean_max_straight:
+                self.set_clean_phase('turn')
+                return self.run_clean()
+            cmd.linear.x = self.clean_speed
+
+        elif self.clean_phase == 'reverse':
+            if elapsed > self.clean_reverse_time:
+                self.set_clean_phase('turn')
+                return self.run_clean()
+            cmd.linear.x = -self.backup_speed
+
+        else:  # 'turn'
+            if elapsed > self.clean_turn_time:
+                self.set_clean_phase('forward')
+                return self.run_clean()
+            cmd.angular.z = self.clean_turn_speed * self.clean_turn_dir
+
+        return cmd
+
+    def run_undock(self):
+        """Sai da base: ré por undock_time e depois meia-volta (no CLEAN)."""
+        if self.state_elapsed() > self.undock_time:
+            self.enter(CLEAN)
+            # Meia-volta exata, para sair de frente para o cômodo.
+            self.clean_phase = 'turn'
+            self.clean_phase_time = time.monotonic()
+            self.clean_turn_time = math.pi / self.clean_turn_speed
+            self.clean_turn_dir = 1.0
+            return self.run_clean()
+        cmd = Twist()
+        cmd.linear.x = -self.backup_speed
+        return cmd
+
+    # ---- Docking -----------------------------------------------------------
 
     def run_search(self):
         """Gira no lugar à procura do feixe do beacon.
@@ -722,8 +862,24 @@ class AutoDocking(Node):
             return self.run_approach()
 
         if self.bumper_hit():
+            # Bateu em parede/móvel varrendo: recua, vira de costas para o
+            # obstáculo e CONTINUA a espiral (ver run_backup).
+            self.backup_from_sweep = True
+            self.backup_skip_reverse = False
             self.enter(BACKUP)
             return self.run_backup()
+
+        if self.search_pattern == 'bounce':
+            # Retas pelo cômodo, girando um ângulo aleatório a cada batida (ou
+            # a cada clean_max_straight sem bater).
+            if self.state_elapsed() > self.clean_max_straight:
+                self.backup_from_sweep = True
+                self.backup_skip_reverse = True
+                self.enter(BACKUP)
+                return self.run_backup()
+            cmd = Twist()
+            cmd.linear.x = self.sweep_speed
+            return cmd
 
         if self.sweep_r is None:
             self.sweep_r = self.sweep_r0()
@@ -764,15 +920,25 @@ class AutoDocking(Node):
             return self.run_contact()
 
         if not self.signal_detected():
-            if self.strength >= self.strength_slow:
-                # Perdeu o sinal MUITO perto da base: é o para-choque tapando o
-                # dockingSensor, não o robô se perdendo. Empurra em frente.
+            if (self.strength >= self.final_strength
+                    and abs(self.angle_error()) <= self.align_threshold):
+                # Perdeu o sinal perto da base E apontado para ela: é o
+                # para-choque tapando o dockingSensor, não o robô se perdendo.
+                # Empurra em frente. (O limiar é mais baixo que strength_slow
+                # porque o ponto exato em que o para-choque tapa o sensor varia
+                # com a pose; errar para o lado do empurrão custa pouco: se não
+                # encostar na base, CONTACT/BACKUP voltam a procurar.)
+                self.final_distance = (1.0 - self.strength) * self.beacon_range
                 self.enter(FINAL)
                 return self.run_final()
             # Sinal perdido longe da base: a próxima varredura começa do zero,
             # centrada aqui (onde o feixe acabou de ser visto).
             self.sweep_r = None
-            # Guarda para que lado a base estava, para girar para o lado certo.
+            # Para que lado girar procurando. Se o sinal sumiu enquanto o robô
+            # GIRAVA PARADO para alinhar, foi o próprio giro que tirou o
+            # dockingSensor (no nariz, 9 cm à frente do centro) do feixe
+            # estreito: desfazer o giro o traz de volta. Senão, gira para o
+            # lado em que a base estava.
             if self.relative_angle is not None:
                 error = self.angle_error()
                 self.search_direction = 1.0 if error >= 0.0 else -1.0
@@ -785,7 +951,9 @@ class AutoDocking(Node):
 
         if abs(error) > self.align_threshold:
             cmd.linear.x = 0.0                      # gira parado até alinhar
+            self.approach_turning = 1.0 if cmd.angular.z >= 0.0 else -1.0
         else:
+            self.approach_turning = 0.0
             cmd.linear.x = self.approach_speed * math.cos(error)
             if self.strength >= self.strength_slow:
                 cmd.linear.x = min(cmd.linear.x, self.final_speed)
@@ -798,7 +966,7 @@ class AutoDocking(Node):
         dockingSensor, e o beacon para de responder. Girar aqui seria jogar
         fora um docking quase pronto, então o robô segue em frente devagar até
         encostar (-> CONTACT), carregar (-> DOCKED, decidido no step) ou
-        esgotar `final_push_time`.
+        esgotar o tempo de percorrer a distância estimada (+ final_push_time).
         """
         if self.bumper_hit():
             self.enter(CONTACT)
@@ -809,12 +977,15 @@ class AutoDocking(Node):
             self.enter(APPROACH)
             return self.run_approach()
 
-        if self.state_elapsed() > self.final_push_time:
+        # Tempo para percorrer a distância estimada pela última intensidade, com
+        # uma folga de final_push_time.
+        push_time = self.final_distance / self.final_push_speed + self.final_push_time
+        if self.state_elapsed() > push_time:
             self.enter(CONTACT)
             return self.run_contact()
 
         cmd = Twist()
-        cmd.linear.x = self.final_speed
+        cmd.linear.x = self.final_push_speed
         return cmd
 
     def run_contact(self):
@@ -829,6 +1000,8 @@ class AutoDocking(Node):
             self.get_logger().warn(
                 f'Encostei em algo e a carga não começou (tentativa '
                 f'{self.contact_failures}): recuando para tentar de novo.')
+            self.backup_from_sweep = False
+            self.backup_skip_reverse = False
             self.enter(BACKUP)
             return self.run_backup()
         return Twist()
@@ -839,18 +1012,56 @@ class AutoDocking(Node):
         return self.backup_time * (1.0 + self.backup_escalation * failures)
 
     def run_backup(self):
-        """Recua (girando um pouco) e volta a procurar, pelo outro lado."""
-        if self.state_elapsed() > self.backup_duration():
-            # Inverte o sentido da busca: insistir no mesmo lado tende a bater
-            # no mesmo obstáculo.
-            self.search_direction = -self.search_direction
-            self.enter(SEARCH)
-            return self.run_search()
+        """Recua (girando um pouco), vira de costas para o obstáculo e retoma.
 
+        Duas fases: ré por backup_duration() e depois um giro no lugar de
+        ~150°, para o mesmo lado da curva da ré. Sem esse giro o robô voltava
+        a bater: a volta de procura do SEARCH tem sentido oposto e terminava,
+        com frequência, apontando de novo para a parede (medido numa
+        simulação da cena: 8 batidas seguidas na mesma parede, ~45 % de
+        bateria perdidos).
+
+        Depois do giro: se a batida foi varrendo, segue o SWEEP (com o raio já
+        aberto e o sentido invertido, que curva para longe da parede); se foi
+        encostando sem carregar, volta ao SEARCH, porque a base está perto.
+        """
+        if self.signal_detected() and self.state_elapsed() > 0.5:
+            self.enter(APPROACH)
+            return self.run_approach()
+
+        if self.backup_turn_time is None:
+            # Sorteia o giro de saída uma vez por BACKUP. Na busca por retas o
+            # ângulo é aleatório (90° a 180°): é o que espalha as retas pelo
+            # cômodo; com um ângulo fixo o robô ficaria indo e voltando na
+            # mesma linha entre duas paredes.
+            if self.backup_from_sweep and self.search_pattern == 'bounce':
+                angle = random.uniform(math.pi / 2, math.pi)
+                self.search_direction = random.choice((-1.0, 1.0))
+            else:
+                angle = self.backup_escape_angle
+            self.backup_turn_time = angle / self.max_angular
+        reverse = 0.0 if self.backup_skip_reverse else self.backup_duration()
+        turn = self.backup_turn_time
+        elapsed = self.state_elapsed()
         cmd = Twist()
-        cmd.linear.x = -self.backup_speed
-        cmd.angular.z = self.backup_turn * self.search_direction
-        return cmd
+
+        if elapsed <= reverse:
+            cmd.linear.x = -self.backup_speed
+            cmd.angular.z = self.backup_turn * self.search_direction
+            return cmd
+
+        if elapsed <= reverse + turn:
+            cmd.angular.z = self.max_angular * self.search_direction
+            return cmd
+
+        # Inverte o sentido da busca: insistir no mesmo lado tende a bater
+        # no mesmo obstáculo.
+        self.search_direction = -self.search_direction
+        if self.backup_from_sweep:
+            self.enter(SWEEP)
+            return self.run_sweep()
+        self.enter(SEARCH)
+        return self.run_search()
 
     def run_docked(self):
         """Na base, carregando: parado.
