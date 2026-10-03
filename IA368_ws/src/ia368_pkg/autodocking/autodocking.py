@@ -598,6 +598,13 @@ class AutoDocking(Node):
                     'Sem /myRobot/battery_state: a ponte caiu ou a simulação parou. '
                     'Parando o robô e soltando o controle.')
                 self.data_lost_warned = True
+            elif self.battery_time == 0.0 and now - self.last_status_log >= 5.0:
+                # Nunca recebemos a bateria: sem ela o docking não liga sozinho.
+                self.last_status_log = now
+                self.get_logger().warn(
+                    'Aguardando /myRobot/battery_state: o docking só liga depois '
+                    'da primeira leitura de bateria. O battery_node está rodando '
+                    'e a simulação está em execução?')
             # IDLE manda o Twist zerado e depois se cala, que é o que queremos:
             # para o robô sem travar a teleoperação, caso só este caminho tenha
             # caído.

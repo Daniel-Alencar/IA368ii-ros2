@@ -224,7 +224,9 @@ cd IA368_ws/src/ia368_pkg/autodocking/coppeliasim
 python3 apply_scene_patch.py --save
 ```
 
-Sintoma de que falta o patch: o robô não se move com `ros2 topic pub /myRobot/cmd_vel ...`, embora o log do autodocking mostre os estados mudando.
+Sem o patch, o `bumper_and_velocity_node` ainda consegue mover o robô: ele repete o último `cmd_vel` nos sinais de override `<h>leftVel`/`<h>rightVel`, que o script original respeita, por até `override_hold` (0,5 s) depois de cada comando. O patch continua recomendado (com ele um `ros2 topic pub --once` mantém o robô andando).
+
+**Conferindo se o docking ligou.** Depois de `colcon build --packages-select ia368_pkg` e `source install/setup.bash`, o log do `autodocking_node` precisa mostrar `Liga o docking abaixo de 95 % de bateria (ativo)` na partida; ~5 s depois, `Bateria em 95 %: ligando o modo de docking.` e `IDLE -> SEARCH`. A cada segundo sai uma linha `[ESTADO] bateria ...% | docking ON/OFF | ...`. Se aparecer `Aguardando /myRobot/battery_state`, a bateria não está chegando (simulação parada ou `battery_node` sem conexão).
 
 ---
 
