@@ -56,6 +56,9 @@ class BumperAndVelocityBridge(Node):
         # velocidade NEGATIVA faz o robô andar para a frente (o python_controler
         # também inverte o sinal). -1.0 = inverter; 1.0 = usar como está.
         self.declare_parameter('joint_direction', -1.0)
+        # Por quanto tempo [s] o último cmd_vel também é reescrito nos sinais de
+        # override <h>leftVel/<h>rightVel (ver cmd_vel_callback). 0 = desliga.
+        self.declare_parameter('override_hold', 0.5)
 
         # --- Interface ROS 2 ------------------------------------------------
         # Publisher: envia as leituras do bumper. O "10" é o tamanho da fila
@@ -90,6 +93,13 @@ class BumperAndVelocityBridge(Node):
         self.wheel_radius = self.get_parameter('wheel_radius').value
         self.joint_direction = self.get_parameter('joint_direction').value
         self.wheel_base = self.get_parameter('wheel_base').value
+        self.override_hold = self.get_parameter('override_hold').value
+        h = str(self.robotHandle)
+        self.left_signal, self.right_signal = h + 'leftVel', h + 'rightVel'
+        # Último comando, em m/s NA RODA (a unidade dos sinais de override), e
+        # o instante em que chegou.
+        self.last_wheel_vel = None
+        self.last_cmd_time = 0.0
         if self.wheel_base <= 0.0:
             # getObjectPosition(A, B) = posição de A no referencial de B.
             # A posição da junta esquerda vista da junta direita é o vetor que
@@ -153,6 +163,9 @@ class BumperAndVelocityBridge(Node):
         # Por fim, joint_direction corrige o sentido de montagem das juntas.
         rightVel = self.joint_direction * (linVel + self.wheel_base / 2 * rotVel) / self.wheel_radius
         leftVel = self.joint_direction * (linVel - self.wheel_base / 2 * rotVel) / self.wheel_radius
+        self.last_wheel_vel = (linVel - self.wheel_base / 2 * rotVel,
+                               linVel + self.wheel_base / 2 * rotVel)
+        self.last_cmd_time = self.now()
         try:
             # Define a velocidade-alvo de cada motor; o motor da junta no
             # CoppeliaSim aplica torque para atingir e manter essa velocidade
@@ -160,11 +173,40 @@ class BumperAndVelocityBridge(Node):
             # último cmd_vel; para pará-lo, publique um Twist zerado.
             self.sim.setJointTargetVelocity(self.leftMotor, leftVel)
             self.sim.setJointTargetVelocity(self.rightMotor, rightVel)
+            self.write_override()
         except Exception as e:
             self.get_logger().error(f'Error setting wheel velocities: {e}')
 
+    def now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def write_override(self):
+        """Repete o último cmd_vel nos sinais <h>leftVel/<h>rightVel.
+
+        Compatibilidade com a cena SEM o patch do python_controler: o script
+        original escreve o valor do joystick (zero) nas juntas a CADA passo e
+        apaga o setJointTargetVelocity acima — o robô não sai do lugar, embora
+        o autodocking mude de estado. Esse mesmo script, porém, dá prioridade
+        aos sinais de override (que ele lê e apaga a cada passo), então os
+        reescrevemos enquanto o comando for recente. A versão modificada do
+        python_controler também os aceita, então isto funciona nas duas.
+
+        Só por `override_hold` segundos depois do último cmd_vel: se fosse para
+        sempre, o joystick da cena nunca mais mandaria no robô.
+        """
+        if (self.override_hold <= 0.0 or self.last_wheel_vel is None
+                or self.now() - self.last_cmd_time > self.override_hold):
+            return
+        left, right = self.last_wheel_vel
+        self.sim.setFloatSignal(self.left_signal, left)
+        self.sim.setFloatSignal(self.right_signal, right)
+
     def publish_bumper(self):
         """Chamado pelo timer (20 Hz): lê o sensor de força e publica em /myRobot/bumper."""
+        try:
+            self.write_override()
+        except Exception as e:
+            self.get_logger().error(f'Error writing velocity override: {e}')
         try:
             # readForceSensor devolve:
             #   result:       bits de estado (bit 0 = há dados válidos)

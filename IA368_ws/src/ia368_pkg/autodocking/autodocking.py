@@ -541,7 +541,10 @@ class AutoDocking(Node):
             self.set_docking_mode(True)
 
         elif (self.release_when_full and self.docking_mode
-                and self.battery >= self.battery_full):
+                and self.state == DOCKED and self.battery >= self.battery_full):
+            # Só solta o robô quando ele está NA BASE com a bateria cheia. Sem o
+            # `state == DOCKED`, ligar o docking à mão (checkbox da cena ou
+            # `ros2 topic pub`) com a bateria em 100 % o desligaria na hora.
             self.get_logger().info(
                 f'Bateria em {self.battery:.0f} %: desligando o modo de docking.')
             self.set_docking_mode(False)
@@ -598,6 +601,13 @@ class AutoDocking(Node):
                     'Sem /myRobot/battery_state: a ponte caiu ou a simulação parou. '
                     'Parando o robô e soltando o controle.')
                 self.data_lost_warned = True
+            elif self.battery_time == 0.0 and now - self.last_status_log >= 5.0:
+                # Nunca recebemos a bateria: sem ela o docking não liga sozinho.
+                self.last_status_log = now
+                self.get_logger().warn(
+                    'Aguardando /myRobot/battery_state: o docking só liga depois '
+                    'da primeira leitura de bateria. O battery_node está rodando '
+                    'e a simulação está em execução?')
             # IDLE manda o Twist zerado e depois se cala, que é o que queremos:
             # para o robô sem travar a teleoperação, caso só este caminho tenha
             # caído.

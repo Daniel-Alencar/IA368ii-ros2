@@ -49,7 +49,7 @@ se o robô estiver dentro do feixe.
 
 | Tópico | Nó da ponte | O que faz na cena |
 |---|---|---|
-| `/myRobot/docking_mode` | `docking_node` | escreve `<h>Docking`. O `python_controler` só reage a `1`, marcando o checkbox "docking". |
+| `/myRobot/docking_mode` | `docking_node` | escreve `<h>Docking` (só quando o valor muda), e o `python_controler` modificado marca/desmarca o checkbox "docking". No sentido contrário, o checkbox escreve `<h>DockingRequest`, que o `docking_node` lê a 10 Hz e **publica** neste mesmo tópico: clicar no checkbox liga/desliga o docking do `autodocking_node`. |
 | `/myRobot/cmd_vel` | `bumper_and_velocity_node` | converte `(v, ω)` em velocidade das rodas e chama `sim.setJointTargetVelocity` nas juntas `leftMotor`/`rightMotor` |
 
 ## 3. Diagrama completo

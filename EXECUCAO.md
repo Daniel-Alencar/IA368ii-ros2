@@ -200,7 +200,11 @@ O comportamento é uma máquina de estados:
 | `SWEEP` | a volta no lugar não achou nada: varre a vizinhança em **espiral** |
 | `DOCKED` | na base, carregando: parado |
 
-O docking liga sozinho com 95 % de bateria (logo no início da simulação) e desliga quando ela chega a 100 %, devolvendo o robô para a teleoperação. Para testar sem esperar a bateria baixar:
+O docking liga sozinho com 95 % de bateria (logo no início da simulação) e desliga quando o robô está na base com 100 %, devolvendo-o para a teleoperação.
+
+**Checkbox "docking" da janela do joystick:** marcar liga o docking na hora (com qualquer nível de bateria) e desmarcar desliga. O checkbox também acompanha o modo atual quando o docking liga ou desliga sozinho. Requer a versão modificada do `python_controler` na cena (`apply_scene_patch.py --save`, ver abaixo): ela escreve o sinal `<h>DockingRequest`, que o `docking_node` publica em `/myRobot/docking_mode`.
+
+Também dá para ligar/desligar pelo terminal:
 
 ```bash
 ros2 topic pub --once /myRobot/docking_mode std_msgs/msg/Int32 "{data: 1}"   # liga
@@ -224,7 +228,9 @@ cd IA368_ws/src/ia368_pkg/autodocking/coppeliasim
 python3 apply_scene_patch.py --save
 ```
 
-Sintoma de que falta o patch: o robô não se move com `ros2 topic pub /myRobot/cmd_vel ...`, embora o log do autodocking mostre os estados mudando.
+Sem o patch, o `bumper_and_velocity_node` ainda consegue mover o robô: ele repete o último `cmd_vel` nos sinais de override `<h>leftVel`/`<h>rightVel`, que o script original respeita, por até `override_hold` (0,5 s) depois de cada comando. O patch continua recomendado (com ele um `ros2 topic pub --once` mantém o robô andando).
+
+**Conferindo se o docking ligou.** Depois de `colcon build --packages-select ia368_pkg` e `source install/setup.bash`, o log do `autodocking_node` precisa mostrar `Liga o docking abaixo de 95 % de bateria (ativo)` na partida; ~5 s depois, `Bateria em 95 %: ligando o modo de docking.` e `IDLE -> SEARCH`. A cada segundo sai uma linha `[ESTADO] bateria ...% | docking ON/OFF | ...`. Se aparecer `Aguardando /myRobot/battery_state`, a bateria não está chegando (simulação parada ou `battery_node` sem conexão).
 
 ---
 
