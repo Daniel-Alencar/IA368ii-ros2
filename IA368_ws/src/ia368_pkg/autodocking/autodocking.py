@@ -163,7 +163,10 @@ class AutoDocking(Node):
         # --- Quando ligar e desligar o docking sozinho -----------------------
         # A bateria desta cena gasta 1 % por segundo simulado e começa em 100 %:
         # são ~100 s até o robô parar.
-        self.declare_parameter('auto_dock_on_low_battery', True)
+        # Desligado por padrão: o docking só começa quando o usuário marca o
+        # checkbox "docking" da janela do joystick (ou publica em
+        # /myRobot/docking_mode). Com True, liga sozinho em battery_low.
+        self.declare_parameter('auto_dock_on_low_battery', False)
         # 95 %: o docking liga ~5 s depois do início da simulação, e o robô tem
         # ~95 s para achar a base. Com a bateria gastando 1 % por segundo, a
         # BUSCA do feixe (que pode passar de 45 s, conforme a posição inicial e
@@ -608,6 +611,12 @@ class AutoDocking(Node):
                     'Aguardando /myRobot/battery_state: o docking só liga depois '
                     'da primeira leitura de bateria. O battery_node está rodando '
                     'e a simulação está em execução?')
+            # Simulação parada/reiniciada: o docking não sobrevive a ela. Sem
+            # isto, ao dar play de novo (sem reiniciar o launch) o robô sairia
+            # fazendo docking com o checkbox da cena desmarcado.
+            if self.docking_mode:
+                self.get_logger().info('Docking desligado: simulação parada.')
+                self.set_docking_mode(False)
             # IDLE manda o Twist zerado e depois se cala, que é o que queremos:
             # para o robô sem travar a teleoperação, caso só este caminho tenha
             # caído.

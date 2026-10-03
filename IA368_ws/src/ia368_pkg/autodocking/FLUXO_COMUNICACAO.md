@@ -131,9 +131,12 @@ Os quatro últimos não estão no enunciado; sem eles o docking trava na prátic
 
 ### 4.2 Quem liga e desliga o docking
 
-O nó liga o modo de docking sozinho quando a bateria cai abaixo de
-`battery_low` (95 % por padrão) e o desliga quando ela chega a `battery_full`
-(100 %), devolvendo o robô para a teleoperação. A bateria desta cena gasta **1 %
+Por padrão o docking só liga pelo **checkbox "docking"** da janela do joystick
+(ou por `/myRobot/docking_mode`), e o nó o desliga quando o robô está na base
+com a bateria em `battery_full` (100 %), devolvendo-o para a teleoperação. Com
+`auto_dock_on_low_battery:=true` (no launch, `auto_dock:=true`), o nó também o
+liga sozinho quando a bateria cai abaixo de `battery_low` (95 %). Se a
+simulação para, o docking é desligado. A bateria desta cena gasta **1 %
 por segundo simulado** e começa em 100 %: são ~100 s de autonomia, e é por isso
 que o limiar é generoso.
 

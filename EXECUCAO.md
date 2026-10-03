@@ -200,7 +200,7 @@ O comportamento é uma máquina de estados:
 | `SWEEP` | a volta no lugar não achou nada: varre a vizinhança em **espiral** |
 | `DOCKED` | na base, carregando: parado |
 
-O docking liga sozinho com 95 % de bateria (logo no início da simulação) e desliga quando o robô está na base com 100 %, devolvendo-o para a teleoperação.
+Por padrão o docking **só começa quando você marca o checkbox "docking"** (o checkbox começa desmarcado) e desliga quando o robô está na base com 100 %, devolvendo-o para a teleoperação. Para ele ligar sozinho com a bateria baixa (95 %), use `ros2 launch ia368_pkg autodocking.launch.py auto_dock:=true`. Parar a simulação também desliga o docking, então dar play de novo começa com ele desligado.
 
 **Checkbox "docking" da janela do joystick:** marcar liga o docking na hora (com qualquer nível de bateria) e desmarcar desliga. O checkbox também acompanha o modo atual quando o docking liga ou desliga sozinho. Requer a versão modificada do `python_controler` na cena (`apply_scene_patch.py --save`, ver abaixo): ela escreve o sinal `<h>DockingRequest`, que o `docking_node` publica em `/myRobot/docking_mode`.
 
