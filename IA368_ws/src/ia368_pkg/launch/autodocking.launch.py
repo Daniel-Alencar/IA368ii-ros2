@@ -14,9 +14,10 @@ Para subir só a ponte e rodar o controlador à mão (útil para depurar com
 
 Argumentos:
 
-    auto_dock:=true     liga o docking sozinho com a bateria baixa (padrão:
-                        false, só pelo checkbox "docking" da cena)
-    battery_low:=95.0   % de bateria em que o docking liga sozinho
+    auto_dock:=false    não liga o docking sozinho com a bateria baixa (só
+                        pelo checkbox "docking" da cena)
+    battery_low:=70.0   % de bateria em que o docking liga sozinho
+    clean:=false        com o docking OFF, não limpa: deixa a teleoperação
     angle_sign:=-1.0    inverte o sentido do giro, se o robô virar para o
                         lado errado ao seguir o beacon
 """
@@ -30,15 +31,19 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     auto_dock = LaunchConfiguration('auto_dock')
+    clean = LaunchConfiguration('clean')
     battery_low = LaunchConfiguration('battery_low')
     angle_sign = LaunchConfiguration('angle_sign')
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'auto_dock', default_value='false',
+            'auto_dock', default_value='true',
             description='liga o docking sozinho quando a bateria chega a battery_low'),
         DeclareLaunchArgument(
-            'battery_low', default_value='95.0',
+            'clean', default_value='true',
+            description='com o docking OFF, limpa (bate e volta); false = teleoperação'),
+        DeclareLaunchArgument(
+            'battery_low', default_value='70.0',
             description='nível de bateria (%) que liga o modo de docking'),
         DeclareLaunchArgument(
             'angle_sign', default_value='1.0',
@@ -62,6 +67,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'auto_dock_on_low_battery': auto_dock,
+                'clean_when_idle': clean,
                 'battery_low': battery_low,
                 'angle_sign': angle_sign,
             }]

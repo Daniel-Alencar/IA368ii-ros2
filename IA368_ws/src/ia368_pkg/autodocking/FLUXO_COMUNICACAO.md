@@ -131,11 +131,12 @@ Os quatro últimos não estão no enunciado; sem eles o docking trava na prátic
 
 ### 4.2 Quem liga e desliga o docking
 
-Por padrão o docking só liga pelo **checkbox "docking"** da janela do joystick
-(ou por `/myRobot/docking_mode`), e o nó o desliga quando o robô está na base
-com a bateria em `battery_full` (100 %), devolvendo-o para a teleoperação. Com
-`auto_dock_on_low_battery:=true` (no launch, `auto_dock:=true`), o nó também o
-liga sozinho quando a bateria cai abaixo de `battery_low` (95 %). Se a
+O docking liga por dois caminhos: o **checkbox "docking"** da janela do
+joystick (que chega por `/myRobot/docking_mode`, com qualquer bateria) e a
+**bateria baixa**, abaixo de `battery_low` (70 %; `auto_dock:=false` no launch
+desativa este caminho). O nó o desliga quando o robô está na base com a bateria
+em `battery_full` (100 %); aí o robô dá ré (`UNDOCK`) e **volta a limpar**
+(`CLEAN`, "bate e volta"; `clean:=false` deixa a teleoperação no lugar). Se a
 simulação para, o docking é desligado. A bateria desta cena gasta **1 %
 por segundo simulado** e começa em 100 %: são ~100 s de autonomia, e é por isso
 que o limiar é generoso.
@@ -261,7 +262,7 @@ esse padrão no log — força constante e erro indo a zero antes de perder o si
 
 ```bash
 ros2 run ia368_pkg autodocking_node --ros-args \
-    -p battery_low:=95.0 -p angle_sign:=1.0 -p approach_speed:=0.25
+    -p battery_low:=70.0 -p angle_sign:=1.0 -p approach_speed:=0.25
 ```
 
 | Parâmetro | Padrão | Para que serve |
@@ -270,10 +271,13 @@ ros2 run ia368_pkg autodocking_node --ros-args \
 | `angle_sign` | 1.0 | sentido do ângulo; **se o robô girar para longe da base, ponha −1.0** |
 | `approach_speed` / `final_speed` | 0.25 / 0.05 | m/s indo para a base e já encostando |
 | `strength_slow` | 0.85 | intensidade acima da qual anda devagar |
-| `align_threshold` | 0.35 rad | acima disso gira parado antes de avançar |
+| `align_threshold` | 0.8 rad | acima disso gira parado antes de avançar (girar parado na borda do feixe tira o sensor dele) |
 | `search_angular_speed` / `search_spin_time` | 1.0 rad/s / 3.0 s | a volta no lugar que o enunciado pede |
 | `sweep_speed` / `sweep_spacing` / `sweep_max_radius` | 0.25 m/s / 0.5 m / 1.5 m | a varredura em **espiral de Arquimedes**: `dr/dt = spacing·v / (2π·r)`, `w = v/r` (espaçamento constante entre voltas; ~55 s e ~2,7 voltas até 1,5 m) |
-| `battery_low` / `battery_full` | 95.0 / 100.0 | % que liga e desliga o docking |
+| `battery_low` / `battery_full` | 70.0 / 100.0 | % que liga e desliga o docking |
+| `clean_when_idle` / `clean_speed` | true / 0.2 m/s | limpeza "bate e volta" com o docking OFF |
+| `search_pattern` | `spiral` | busca do feixe: `spiral` ou `bounce` (retas com giros aleatórios) |
+| `final_strength` / `final_push_speed` | 0.7 / 0.08 m/s | perdendo o sinal acima desta força e alinhado, empurra até a base |
 | `final_push_time` | 3.0 s | empurrão às cegas quando o beacon se cala junto à base |
 | `contact_wait` | 3.0 s | espera, após encostar, para ver se a carga começa |
 | `bumper_threshold` | 1.0 N | desvio da baseline que conta como colisão |
